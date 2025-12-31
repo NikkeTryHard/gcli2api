@@ -1,47 +1,17 @@
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from typing import Any, AsyncIterator, Dict, Optional
 
 from log import log
 
+from .anthropic_helpers import anthropic_debug_enabled, remove_nulls_for_tool_input
+
 
 def _sse_event(event: str, data: Dict[str, Any]) -> bytes:
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
-
-_DEBUG_TRUE = {"1", "true", "yes", "on"}
-
-def _remove_nulls_for_tool_input(value: Any) -> Any:
-    """
-    递归移除 dict/list 中值为 null/None 的字段/元素。
-
-    背景：Roo/Kilo 在 Anthropic native tool 路径下，若收到 tool_use.input 中包含 null，
-    可能会把 null 当作真实入参执行（例如“在 null 中搜索”）。因此在输出 input_json_delta 前做兜底清理。
-    """
-    if isinstance(value, dict):
-        cleaned: Dict[str, Any] = {}
-        for k, v in value.items():
-            if v is None:
-                continue
-            cleaned[k] = _remove_nulls_for_tool_input(v)
-        return cleaned
-
-    if isinstance(value, list):
-        cleaned_list = []
-        for item in value:
-            if item is None:
-                continue
-            cleaned_list.append(_remove_nulls_for_tool_input(item))
-        return cleaned_list
-
-    return value
-
-
-def _anthropic_debug_enabled() -> bool:
-    return str(os.getenv("ANTHROPIC_DEBUG", "")).strip().lower() in _DEBUG_TRUE
 
 
 class _StreamingState:
@@ -112,21 +82,33 @@ async def antigravity_sse_to_anthropic_sse(
     initial_input_tokens: int = 0,
     credential_manager: Any = None,
     credential_name: Optional[str] = None,
+    client_thinking_enabled: bool = True,
+    thinking_to_text: bool = False,
 ) -> AsyncIterator[bytes]:
     """
     将 Antigravity SSE（data: {...}）转换为 Anthropic Messages Streaming SSE。
+
+    Args:
+        client_thinking_enabled: If False, thinking blocks from downstream are filtered/converted.
+        thinking_to_text: If True and thinking is disabled, convert thinking to regular text
+                         wrapped in <assistant_thinking> tags (preserves context).
+                         If False and thinking is disabled, thinking is stripped entirely.
     """
     state = _StreamingState(message_id=message_id, model=model)
     success_recorded = False
     message_start_sent = False
     pending_output: list[bytes] = []
+    # Buffer for thinking content when converting to text
+    thinking_text_buffer: str = ""
 
     try:
         initial_input_tokens_int = max(0, int(initial_input_tokens or 0))
     except Exception:
         initial_input_tokens_int = 0
 
-    def pick_usage_metadata(response: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
+    def pick_usage_metadata(
+        response: Dict[str, Any], candidate: Dict[str, Any]
+    ) -> Dict[str, Any]:
         response_usage = response.get("usageMetadata", {}) or {}
         if not isinstance(response_usage, dict):
             response_usage = {}
@@ -175,7 +157,10 @@ async def antigravity_sse_to_anthropic_sse(
                         "content": [],
                         "stop_reason": None,
                         "stop_sequence": None,
-                        "usage": {"input_tokens": int(input_tokens or 0), "output_tokens": 0},
+                        "usage": {
+                            "input_tokens": int(input_tokens or 0),
+                            "output_tokens": 0,
+                        },
                     },
                 },
             )
@@ -215,7 +200,9 @@ async def antigravity_sse_to_anthropic_sse(
                         state.input_tokens = int(usage.get("promptTokenCount", 0) or 0)
                         state.has_input_tokens = True
                     if "candidatesTokenCount" in usage:
-                        state.output_tokens = int(usage.get("candidatesTokenCount", 0) or 0)
+                        state.output_tokens = int(
+                            usage.get("candidatesTokenCount", 0) or 0
+                        )
                         state.has_output_tokens = True
 
             # 为保证 message_start 永远是首个事件：在拿到真实值之前，把所有事件暂存到 pending_output。
@@ -226,7 +213,7 @@ async def antigravity_sse_to_anthropic_sse(
                 if not isinstance(part, dict):
                     continue
 
-                if _anthropic_debug_enabled() and "thoughtSignature" in part:
+                if anthropic_debug_enabled() and "thoughtSignature" in part:
                     try:
                         sig_val = part.get("thoughtSignature")
                         sig_len = len(str(sig_val)) if sig_val is not None else 0
@@ -235,7 +222,8 @@ async def antigravity_sse_to_anthropic_sse(
                     log.info(
                         "[ANTHROPIC][thinking_signature] 收到 thoughtSignature 字段: "
                         f"current_block_type={state._current_block_type}, "
-                        f"current_index={state._current_block_index}, len={sig_len}"
+                        f"current_index={state._current_block_index}, len={sig_len}",
+                        req_id=message_id,
                     )
 
                 # 兼容：下游可能会把 thoughtSignature 单独作为一个空 part 发送（此时未必带 thought=true）。
@@ -251,7 +239,10 @@ async def antigravity_sse_to_anthropic_sse(
                         {
                             "type": "content_block_delta",
                             "index": state._current_block_index,
-                            "delta": {"type": "signature_delta", "signature": signature},
+                            "delta": {
+                                "type": "signature_delta",
+                                "signature": signature,
+                            },
                         },
                     )
                     state._current_thinking_signature = str(signature)
@@ -259,13 +250,26 @@ async def antigravity_sse_to_anthropic_sse(
                         ready_output.append(evt)
                     else:
                         enqueue(evt)
-                    if _anthropic_debug_enabled():
+                    if anthropic_debug_enabled():
                         log.info(
                             "[ANTHROPIC][thinking_signature] 已输出 signature_delta: "
-                            f"index={state._current_block_index}"
+                            f"index={state._current_block_index}",
+                            req_id=message_id,
                         )
 
                 if part.get("thought") is True:
+                    thinking_text = part.get("text", "")
+
+                    # Handle thinking based on client preference
+                    if not client_thinking_enabled:
+                        # Client requested thinking disabled
+                        if thinking_to_text and thinking_text:
+                            # Buffer thinking content to prepend to next text block
+                            thinking_text_buffer += thinking_text
+                        # Skip emitting thinking blocks entirely
+                        continue
+
+                    # Client wants thinking - emit native thinking blocks
                     if state._current_block_type != "thinking":
                         stop_evt = state.close_block_if_open()
                         if stop_evt:
@@ -279,14 +283,16 @@ async def antigravity_sse_to_anthropic_sse(
                             ready_output.append(evt)
                         else:
                             enqueue(evt)
-                    thinking_text = part.get("text", "")
                     if thinking_text:
                         evt = _sse_event(
                             "content_block_delta",
                             {
                                 "type": "content_block_delta",
                                 "index": state._current_block_index,
-                                "delta": {"type": "thinking_delta", "thinking": thinking_text},
+                                "delta": {
+                                    "type": "thinking_delta",
+                                    "thinking": thinking_text,
+                                },
                             },
                         )
                         if message_start_sent:
@@ -312,6 +318,26 @@ async def antigravity_sse_to_anthropic_sse(
                             ready_output.append(evt)
                         else:
                             enqueue(evt)
+
+                    # Flush buffered thinking content as text (wrapped in tags)
+                    if thinking_text_buffer:
+                        wrapped_thinking = f"<assistant_thinking>\n{thinking_text_buffer}</assistant_thinking>\n\n"
+                        evt = _sse_event(
+                            "content_block_delta",
+                            {
+                                "type": "content_block_delta",
+                                "index": state._current_block_index,
+                                "delta": {
+                                    "type": "text_delta",
+                                    "text": wrapped_thinking,
+                                },
+                            },
+                        )
+                        if message_start_sent:
+                            ready_output.append(evt)
+                        else:
+                            enqueue(evt)
+                        thinking_text_buffer = ""
 
                     if text:
                         evt = _sse_event(
@@ -378,7 +404,7 @@ async def antigravity_sse_to_anthropic_sse(
                     fc = part.get("functionCall", {}) or {}
                     tool_id = fc.get("id") or f"toolu_{uuid.uuid4().hex}"
                     tool_name = fc.get("name") or ""
-                    tool_args = _remove_nulls_for_tool_input(fc.get("args", {}) or {})
+                    tool_args = remove_nulls_for_tool_input(fc.get("args", {}) or {})
 
                     idx = state._next_index()
                     evt_start = _sse_event(
@@ -395,13 +421,18 @@ async def antigravity_sse_to_anthropic_sse(
                         },
                     )
 
-                    input_json = json.dumps(tool_args, ensure_ascii=False, separators=(",", ":"))
+                    input_json = json.dumps(
+                        tool_args, ensure_ascii=False, separators=(",", ":")
+                    )
                     evt_delta = _sse_event(
                         "content_block_delta",
                         {
                             "type": "content_block_delta",
                             "index": idx,
-                            "delta": {"type": "input_json_delta", "partial_json": input_json},
+                            "delta": {
+                                "type": "input_json_delta",
+                                "partial_json": input_json,
+                            },
                         },
                     )
                     evt_stop = _sse_event(
@@ -426,6 +457,39 @@ async def antigravity_sse_to_anthropic_sse(
                 state.finish_reason = str(finish_reason)
                 break
 
+        # Flush any remaining thinking buffer as a text block
+        if thinking_text_buffer:
+            # Close any open block first
+            stop_evt = state.close_block_if_open()
+            if stop_evt:
+                if message_start_sent:
+                    yield stop_evt
+                else:
+                    enqueue(stop_evt)
+
+            # Open a new text block for the buffered thinking
+            evt = state.open_text_block()
+            if message_start_sent:
+                yield evt
+            else:
+                enqueue(evt)
+
+            wrapped_thinking = (
+                f"<assistant_thinking>\n{thinking_text_buffer}</assistant_thinking>"
+            )
+            evt = _sse_event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": state._current_block_index,
+                    "delta": {"type": "text_delta", "text": wrapped_thinking},
+                },
+            )
+            if message_start_sent:
+                yield evt
+            else:
+                enqueue(evt)
+
         stop_evt = state.close_block_if_open()
         if stop_evt:
             if message_start_sent:
@@ -444,12 +508,13 @@ async def antigravity_sse_to_anthropic_sse(
         if state.finish_reason == "MAX_TOKENS" and not state.has_tool_use:
             stop_reason = "max_tokens"
 
-        if _anthropic_debug_enabled():
+        if anthropic_debug_enabled():
             estimated_input = initial_input_tokens_int
             downstream_input = state.input_tokens if state.has_input_tokens else 0
             log.info(
                 f"[ANTHROPIC][TOKEN] 流式 token: estimated={estimated_input}, "
-                f"downstream={downstream_input}"
+                f"downstream={downstream_input}",
+                req_id=message_id,
             )
 
         yield _sse_event(
@@ -458,15 +523,19 @@ async def antigravity_sse_to_anthropic_sse(
                 "type": "message_delta",
                 "delta": {"stop_reason": stop_reason, "stop_sequence": None},
                 "usage": {
-                    "input_tokens": state.input_tokens if state.has_input_tokens else initial_input_tokens_int,
-                    "output_tokens": state.output_tokens if state.has_output_tokens else 0,
+                    "input_tokens": state.input_tokens
+                    if state.has_input_tokens
+                    else initial_input_tokens_int,
+                    "output_tokens": state.output_tokens
+                    if state.has_output_tokens
+                    else 0,
                 },
             },
         )
         yield _sse_event("message_stop", {"type": "message_stop"})
 
     except Exception as e:
-        log.error(f"[ANTHROPIC] 流式转换失败: {e}")
+        log.error(f"[ANTHROPIC] 流式转换失败: {e}", req_id=message_id)
         # 错误场景也尽量保证客户端先收到 message_start（否则部分客户端会直接挂起）。
         if not message_start_sent:
             yield _sse_event(
@@ -481,7 +550,10 @@ async def antigravity_sse_to_anthropic_sse(
                         "content": [],
                         "stop_reason": None,
                         "stop_sequence": None,
-                        "usage": {"input_tokens": initial_input_tokens_int, "output_tokens": 0},
+                        "usage": {
+                            "input_tokens": initial_input_tokens_int,
+                            "output_tokens": 0,
+                        },
                     },
                 },
             )

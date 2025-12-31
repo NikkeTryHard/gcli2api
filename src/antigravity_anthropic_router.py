@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import uuid
 from typing import Any, Dict, Optional
-import json
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -20,12 +18,16 @@ from .antigravity_api import (
 )
 from .anthropic_converter import convert_anthropic_request_to_antigravity_components
 from .anthropic_streaming import antigravity_sse_to_anthropic_sse
+from .anthropic_helpers import (
+    DEBUG_TRUE,
+    anthropic_debug_enabled,
+    remove_nulls_for_tool_input,
+)
 from .token_estimator import estimate_input_tokens
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
-_DEBUG_TRUE = {"1", "true", "yes", "on"}
 _REDACTED = "<REDACTED>"
 _SENSITIVE_KEYS = {
     "authorization",
@@ -38,31 +40,6 @@ _SENSITIVE_KEYS = {
     "password",
     "secret",
 }
-
-def _remove_nulls_for_tool_input(value: Any) -> Any:
-    """
-    递归移除 dict/list 中值为 null/None 的字段/元素。
-
-    背景：Roo/Kilo 在 Anthropic native tool 路径下，若收到 tool_use.input 中包含 null，
-    可能会把 null 当作真实入参执行（例如“在 null 中搜索”）。因此在返回 tool_use.input 前做兜底清理。
-    """
-    if isinstance(value, dict):
-        cleaned: Dict[str, Any] = {}
-        for k, v in value.items():
-            if v is None:
-                continue
-            cleaned[k] = _remove_nulls_for_tool_input(v)
-        return cleaned
-
-    if isinstance(value, list):
-        cleaned_list = []
-        for item in value:
-            if item is None:
-                continue
-            cleaned_list.append(_remove_nulls_for_tool_input(item))
-        return cleaned_list
-
-    return value
 
 
 def _anthropic_debug_max_chars() -> int:
@@ -78,17 +55,13 @@ def _anthropic_debug_max_chars() -> int:
         return 2000
 
 
-def _anthropic_debug_enabled() -> bool:
-    return str(os.getenv("ANTHROPIC_DEBUG", "")).strip().lower() in _DEBUG_TRUE
-
-
 def _anthropic_debug_body_enabled() -> bool:
     """
-    是否打印请求体/下游请求体等“高体积”调试日志。
+    是否打印请求体/下游请求体等"高体积"调试日志。
 
     说明：`ANTHROPIC_DEBUG=1` 仅开启 token 对比等精简日志；为避免刷屏，入参/下游 body 必须显式开启。
     """
-    return str(os.getenv("ANTHROPIC_DEBUG_BODY", "")).strip().lower() in _DEBUG_TRUE
+    return str(os.getenv("ANTHROPIC_DEBUG_BODY", "")).strip().lower() in DEBUG_TRUE
 
 
 def _redact_for_log(value: Any, *, key_hint: str | None = None, max_chars: int) -> Any:
@@ -112,7 +85,9 @@ def _redact_for_log(value: Any, *, key_hint: str | None = None, max_chars: int) 
         return redacted
 
     if isinstance(value, list):
-        return [_redact_for_log(v, key_hint=key_hint, max_chars=max_chars) for v in value]
+        return [
+            _redact_for_log(v, key_hint=key_hint, max_chars=max_chars) for v in value
+        ]
 
     if isinstance(value, str):
         if (key_hint or "").lower() == "data" and len(value) > 64:
@@ -128,7 +103,9 @@ def _redact_for_log(value: Any, *, key_hint: str | None = None, max_chars: int) 
 
 def _json_dumps_for_log(data: Any) -> str:
     try:
-        return json.dumps(data, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        return json.dumps(
+            data, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        )
     except Exception:
         return str(data)
 
@@ -137,7 +114,7 @@ def _debug_log_request_payload(request: Request, payload: Dict[str, Any]) -> Non
     """
     在开启 `ANTHROPIC_DEBUG` 时打印入参（已脱敏/截断）。
     """
-    if not _anthropic_debug_enabled() or not _anthropic_debug_body_enabled():
+    if not anthropic_debug_enabled() or not _anthropic_debug_body_enabled():
         return
 
     max_chars = _anthropic_debug_max_chars()
@@ -158,12 +135,14 @@ def _debug_log_downstream_request_body(request_body: Dict[str, Any]) -> None:
     """
     在开启 `ANTHROPIC_DEBUG` 时打印最终转发到下游的请求体（已截断）。
     """
-    if not _anthropic_debug_enabled() or not _anthropic_debug_body_enabled():
+    if not anthropic_debug_enabled() or not _anthropic_debug_body_enabled():
         return
 
     max_chars = _anthropic_debug_max_chars()
     safe_body = _redact_for_log(request_body, max_chars=max_chars)
-    log.info(f"[ANTHROPIC][DEBUG] downstream_request_body={_json_dumps_for_log(safe_body)}")
+    log.info(
+        f"[ANTHROPIC][DEBUG] downstream_request_body={_json_dumps_for_log(safe_body)}"
+    )
 
 
 def _anthropic_error(
@@ -201,10 +180,13 @@ def _extract_api_token(
 
 def _infer_project_and_session(credential_data: Dict[str, Any]) -> tuple[str, str]:
     project_id = credential_data.get("project_id")
-    session_id = f"session-{uuid.uuid4().hex}"   
+    session_id = f"session-{uuid.uuid4().hex}"
     return str(project_id), str(session_id)
 
-def _pick_usage_metadata_from_antigravity_response(response_data: Dict[str, Any]) -> Dict[str, Any]:
+
+def _pick_usage_metadata_from_antigravity_response(
+    response_data: Dict[str, Any],
+) -> Dict[str, Any]:
     """
     兼容下游 usageMetadata 的多种落点：
     - response.usageMetadata
@@ -247,6 +229,8 @@ def _convert_antigravity_response_to_anthropic_message(
     model: str,
     message_id: str,
     fallback_input_tokens: int = 0,
+    client_thinking_enabled: bool = True,
+    thinking_to_text: bool = False,
 ) -> Dict[str, Any]:
     candidate = response_data.get("response", {}).get("candidates", [{}])[0] or {}
     parts = candidate.get("content", {}).get("parts", []) or []
@@ -254,13 +238,27 @@ def _convert_antigravity_response_to_anthropic_message(
 
     content = []
     has_tool_use = False
+    thinking_text_buffer = ""
 
     for part in parts:
         if not isinstance(part, dict):
             continue
 
         if part.get("thought") is True:
-            block: Dict[str, Any] = {"type": "thinking", "thinking": part.get("text", "")}
+            thinking_text = part.get("text", "")
+
+            if not client_thinking_enabled:
+                # Client wants thinking disabled
+                if thinking_to_text and thinking_text:
+                    thinking_text_buffer += thinking_text
+                # Skip adding thinking block
+                continue
+
+            # Client wants thinking - emit native thinking blocks
+            block: Dict[str, Any] = {
+                "type": "thinking",
+                "thinking": thinking_text,
+            }
             signature = part.get("thoughtSignature")
             if signature:
                 block["signature"] = signature
@@ -268,10 +266,22 @@ def _convert_antigravity_response_to_anthropic_message(
             continue
 
         if "text" in part:
-            content.append({"type": "text", "text": part.get("text", "")})
+            text = part.get("text", "")
+            # Prepend any buffered thinking content
+            if thinking_text_buffer:
+                wrapped = f"<assistant_thinking>\n{thinking_text_buffer}</assistant_thinking>\n\n"
+                text = wrapped + text
+                thinking_text_buffer = ""
+            content.append({"type": "text", "text": text})
             continue
 
         if "functionCall" in part:
+            # Flush any buffered thinking content before tool_use
+            if thinking_text_buffer:
+                wrapped = f"<assistant_thinking>\n{thinking_text_buffer}</assistant_thinking>\n\n"
+                content.append({"type": "text", "text": wrapped})
+                thinking_text_buffer = ""
+
             has_tool_use = True
             fc = part.get("functionCall", {}) or {}
             content.append(
@@ -279,7 +289,7 @@ def _convert_antigravity_response_to_anthropic_message(
                     "type": "tool_use",
                     "id": fc.get("id") or f"toolu_{uuid.uuid4().hex}",
                     "name": fc.get("name") or "",
-                    "input": _remove_nulls_for_tool_input(fc.get("args", {}) or {}),
+                    "input": remove_nulls_for_tool_input(fc.get("args", {}) or {}),
                 }
             )
             continue
@@ -298,16 +308,33 @@ def _convert_antigravity_response_to_anthropic_message(
             )
             continue
 
+    # Flush any remaining thinking buffer as a text block
+    if thinking_text_buffer:
+        wrapped = f"<assistant_thinking>\n{thinking_text_buffer}</assistant_thinking>"
+        content.append({"type": "text", "text": wrapped})
+
     finish_reason = candidate.get("finishReason")
     stop_reason = "tool_use" if has_tool_use else "end_turn"
     if finish_reason == "MAX_TOKENS" and not has_tool_use:
         stop_reason = "max_tokens"
 
-    input_tokens_present = isinstance(usage_metadata, dict) and "promptTokenCount" in usage_metadata
-    output_tokens_present = isinstance(usage_metadata, dict) and "candidatesTokenCount" in usage_metadata
+    input_tokens_present = (
+        isinstance(usage_metadata, dict) and "promptTokenCount" in usage_metadata
+    )
+    output_tokens_present = (
+        isinstance(usage_metadata, dict) and "candidatesTokenCount" in usage_metadata
+    )
 
-    input_tokens = usage_metadata.get("promptTokenCount", 0) if isinstance(usage_metadata, dict) else 0
-    output_tokens = usage_metadata.get("candidatesTokenCount", 0) if isinstance(usage_metadata, dict) else 0
+    input_tokens = (
+        usage_metadata.get("promptTokenCount", 0)
+        if isinstance(usage_metadata, dict)
+        else 0
+    )
+    output_tokens = (
+        usage_metadata.get("candidatesTokenCount", 0)
+        if isinstance(usage_metadata, dict)
+        else 0
+    )
 
     if not input_tokens_present:
         input_tokens = max(0, int(fallback_input_tokens or 0))
@@ -329,6 +356,7 @@ def _convert_antigravity_response_to_anthropic_message(
     }
 
 
+@router.post("/v1/messages")
 @router.post("/antigravity/v1/messages")
 async def anthropic_messages(
     request: Request,
@@ -339,18 +367,24 @@ async def anthropic_messages(
     password = await get_api_password()
     token = _extract_api_token(request, credentials)
     if token != password:
-        return _anthropic_error(status_code=403, message="密码错误", error_type="authentication_error")
+        return _anthropic_error(
+            status_code=403, message="密码错误", error_type="authentication_error"
+        )
 
     try:
         payload = await request.json()
     except Exception as e:
         return _anthropic_error(
-            status_code=400, message=f"JSON 解析失败: {str(e)}", error_type="invalid_request_error"
+            status_code=400,
+            message=f"JSON 解析失败: {str(e)}",
+            error_type="invalid_request_error",
         )
 
     if not isinstance(payload, dict):
         return _anthropic_error(
-            status_code=400, message="请求体必须为 JSON object", error_type="invalid_request_error"
+            status_code=400,
+            message="请求体必须为 JSON object",
+            error_type="invalid_request_error",
         )
 
     _debug_log_request_payload(request, payload)
@@ -371,6 +405,23 @@ async def anthropic_messages(
         else:
             thinking_summary = thinking_value
 
+    # Determine if client wants thinking blocks in response
+    client_thinking_enabled = True
+    thinking_to_text = False
+    if isinstance(thinking_value, dict):
+        client_thinking_enabled = thinking_value.get("type") == "enabled"
+    elif thinking_value is False:
+        client_thinking_enabled = False
+
+    # Check for "nothinking" model variant - always convert thinking to text
+    model_str = str(model) if model else ""
+    if "-nothinking" in model_str.lower():
+        client_thinking_enabled = False
+        thinking_to_text = True
+    elif not client_thinking_enabled:
+        # Default: convert thinking to text when disabled (preserves context)
+        thinking_to_text = True
+
     if not model or max_tokens is None or not isinstance(messages, list):
         return _anthropic_error(
             status_code=400,
@@ -386,20 +437,34 @@ async def anthropic_messages(
         client_port = "unknown"
 
     user_agent = request.headers.get("user-agent", "")
+
+    # Generate message_id early for request correlation
+    message_id = f"msg_{uuid.uuid4().hex}"
+
     log.info(
         f"[ANTHROPIC] /messages 收到请求: client={client_host}:{client_port}, model={model}, "
         f"stream={stream}, messages={len(messages)}, thinking_present={thinking_present}, "
-        f"thinking={thinking_summary}, ua={user_agent}"
+        f"thinking={thinking_summary}, ua={user_agent}",
+        req_id=message_id,
     )
 
-    if len(messages) == 1 and messages[0].get("role") == "user" and messages[0].get("content") == "Hi":
+    if (
+        len(messages) == 1
+        and messages[0].get("role") == "user"
+        and messages[0].get("content") == "Hi"
+    ):
         return JSONResponse(
             content={
                 "id": f"msg_{uuid.uuid4().hex}",
                 "type": "message",
                 "role": "assistant",
                 "model": str(model),
-                "content": [{"type": "text", "text": "antigravity Anthropic Messages 正常工作中"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "antigravity Anthropic Messages 正常工作中",
+                    }
+                ],
                 "stop_reason": "end_turn",
                 "stop_sequence": None,
                 "usage": {"input_tokens": 0, "output_tokens": 0},
@@ -419,12 +484,15 @@ async def anthropic_messages(
     try:
         components = convert_anthropic_request_to_antigravity_components(payload)
     except Exception as e:
-        log.error(f"[ANTHROPIC] 请求转换失败: {e}")
+        log.error(f"[ANTHROPIC] 请求转换失败: {e}", req_id=message_id)
         return _anthropic_error(
             status_code=400, message="请求转换失败", error_type="invalid_request_error"
         )
 
-    log.info(f"[ANTHROPIC] /messages 模型映射: upstream={model} -> downstream={components['model']}")
+    log.info(
+        f"[ANTHROPIC] /messages 模型映射: upstream={model} -> downstream={components['model']}",
+        req_id=message_id,
+    )
 
     # 下游要求每条 text 内容块必须包含“非空白”文本；上游客户端偶尔会追加空白 text block（例如图片后跟一个空字符串），
     # 经过转换过滤后可能导致 contents 为空，此时应在本地直接返回 400，避免把无效请求打到下游。
@@ -440,7 +508,7 @@ async def anthropic_messages(
     try:
         estimated_tokens = estimate_input_tokens(payload)
     except Exception as e:
-        log.debug(f"[ANTHROPIC] token 估算失败: {e}")
+        log.debug(f"[ANTHROPIC] token 估算失败: {e}", req_id=message_id)
 
     request_body = build_antigravity_request_body(
         contents=components["contents"],
@@ -454,14 +522,18 @@ async def anthropic_messages(
     _debug_log_downstream_request_body(request_body)
 
     if stream:
-        message_id = f"msg_{uuid.uuid4().hex}"
+        # message_id already generated at start of handler for correlation
 
         try:
-            resources, cred_name, _ = await send_antigravity_request_stream(request_body, cred_mgr)
+            resources, cred_name, _ = await send_antigravity_request_stream(
+                request_body, cred_mgr
+            )
             response, stream_ctx, client = resources
         except Exception as e:
-            log.error(f"[ANTHROPIC] 下游流式请求失败: {e}")
-            return _anthropic_error(status_code=500, message="下游请求失败", error_type="api_error")
+            log.error(f"[ANTHROPIC] 下游流式请求失败: {e}", req_id=message_id)
+            return _anthropic_error(
+                status_code=500, message="下游请求失败", error_type="api_error"
+            )
 
         async def stream_generator():
             try:
@@ -473,36 +545,47 @@ async def anthropic_messages(
                     initial_input_tokens=estimated_tokens,
                     credential_manager=cred_mgr,
                     credential_name=cred_name,
+                    client_thinking_enabled=client_thinking_enabled,
+                    thinking_to_text=thinking_to_text,
                 ):
                     yield chunk
             finally:
                 try:
                     await stream_ctx.__aexit__(None, None, None)
                 except Exception as e:
-                    log.debug(f"[ANTHROPIC] 关闭 stream_ctx 失败: {e}")
+                    log.debug(
+                        f"[ANTHROPIC] 关闭 stream_ctx 失败: {e}", req_id=message_id
+                    )
                 try:
                     await client.aclose()
                 except Exception as e:
-                    log.debug(f"[ANTHROPIC] 关闭 client 失败: {e}")
+                    log.debug(f"[ANTHROPIC] 关闭 client 失败: {e}", req_id=message_id)
 
         return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
-    request_id = f"msg_{int(time.time() * 1000)}"
+    # Use message_id generated at start of handler for correlation
     try:
-        response_data, _, _ = await send_antigravity_request_no_stream(request_body, cred_mgr)
+        response_data, _, _ = await send_antigravity_request_no_stream(
+            request_body, cred_mgr
+        )
     except Exception as e:
-        log.error(f"[ANTHROPIC] 下游非流式请求失败: {e}")
-        return _anthropic_error(status_code=500, message="下游请求失败", error_type="api_error")
+        log.error(f"[ANTHROPIC] 下游非流式请求失败: {e}", req_id=message_id)
+        return _anthropic_error(
+            status_code=500, message="下游请求失败", error_type="api_error"
+        )
 
     anthropic_response = _convert_antigravity_response_to_anthropic_message(
         response_data,
         model=str(model),
-        message_id=request_id,
+        message_id=message_id,
         fallback_input_tokens=estimated_tokens,
+        client_thinking_enabled=client_thinking_enabled,
+        thinking_to_text=thinking_to_text,
     )
     return JSONResponse(content=anthropic_response)
 
 
+@router.post("/v1/messages/count_tokens")
 @router.post("/antigravity/v1/messages/count_tokens")
 async def anthropic_messages_count_tokens(
     request: Request,
@@ -518,18 +601,24 @@ async def anthropic_messages_count_tokens(
     password = await get_api_password()
     token = _extract_api_token(request, credentials)
     if token != password:
-        return _anthropic_error(status_code=403, message="密码错误", error_type="authentication_error")
+        return _anthropic_error(
+            status_code=403, message="密码错误", error_type="authentication_error"
+        )
 
     try:
         payload = await request.json()
     except Exception as e:
         return _anthropic_error(
-            status_code=400, message=f"JSON 解析失败: {str(e)}", error_type="invalid_request_error"
+            status_code=400,
+            message=f"JSON 解析失败: {str(e)}",
+            error_type="invalid_request_error",
         )
 
     if not isinstance(payload, dict):
         return _anthropic_error(
-            status_code=400, message="请求体必须为 JSON object", error_type="invalid_request_error"
+            status_code=400,
+            message="请求体必须为 JSON object",
+            error_type="invalid_request_error",
         )
 
     _debug_log_request_payload(request, payload)

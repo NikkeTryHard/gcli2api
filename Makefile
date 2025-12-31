@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test lint format clean run docker-build docker-run docker-compose-up docker-compose-down
+.PHONY: help install install-dev test lint format clean run docker-build docker-run docker-compose-up docker-compose-down test-cov test-thinking
 
 help:
 	@echo "gcli2api - Development Commands"
@@ -8,6 +8,7 @@ help:
 	@echo "  make install-dev        - Install development dependencies"
 	@echo "  make test               - Run tests"
 	@echo "  make test-cov           - Run tests with coverage report"
+	@echo "  make test-thinking      - Run tests with 80% coverage for thinking-related code"
 	@echo "  make lint               - Run linters (flake8, mypy)"
 	@echo "  make format             - Format code with black"
 	@echo "  make format-check       - Check code formatting without making changes"
@@ -26,10 +27,33 @@ install-dev:
 	pip install -r requirements-dev.txt
 
 test:
-	python -m pytest -v
+	python -m pytest tests/ -v
 
 test-cov:
-	python -m pytest --cov=src --cov-report=term-missing --cov-report=html
+	python -m pytest tests/ --cov=src --cov-report=term-missing --cov-report=html
+
+# Run tests with coverage for thinking-related files
+# anthropic_streaming.py: 80%+ (core streaming conversion)
+# antigravity_anthropic_router.py: 80%+ (API routes with integration tests)
+test-thinking:
+	@echo "Running tests with coverage for thinking-related files..."
+	@echo "=============================================="
+	@echo "Checking anthropic_streaming.py (80% required)"
+	@echo "=============================================="
+	python -m pytest tests/ \
+		--cov=src.anthropic_streaming \
+		--cov-report=term-missing \
+		--cov-fail-under=80 -q
+	@echo ""
+	@echo "=============================================="
+	@echo "Checking antigravity_anthropic_router.py (80% required)"
+	@echo "=============================================="
+	python -m pytest tests/ \
+		--cov=src.antigravity_anthropic_router \
+		--cov-report=term-missing \
+		--cov-fail-under=80 -q
+	@echo ""
+	@echo "Thinking-related code coverage: PASSED"
 
 lint:
 	python -m flake8 src/ web.py config.py log.py --max-line-length=100 --extend-ignore=E203,W503

@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any, Dict, List, Optional, Union
 
 from log import log
 
+from .anthropic_helpers import anthropic_debug_enabled
+
 
 DEFAULT_THINKING_BUDGET = 1024
 DEFAULT_TEMPERATURE = 0.4
-
-
-def _anthropic_debug_enabled() -> bool:
-    return str(os.getenv("ANTHROPIC_DEBUG", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _is_non_whitespace_text(value: Any) -> bool:
@@ -35,7 +32,9 @@ def _is_non_whitespace_text(value: Any) -> bool:
         return False
 
 
-def get_thinking_config(thinking: Optional[Union[bool, Dict[str, Any]]]) -> Dict[str, Any]:
+def get_thinking_config(
+    thinking: Optional[Union[bool, Dict[str, Any]]],
+) -> Dict[str, Any]:
     """
     根据 Anthropic/Claude 请求的 thinking 参数生成下游 thinkingConfig。
 
@@ -182,14 +181,19 @@ def clean_json_schema(schema: Any) -> Any:
 
     cleaned: Dict[str, Any] = {}
     for key, value in schema.items():
-        if key in unsupported_keys or key in fields_to_remove or key in validation_fields:
+        if (
+            key in unsupported_keys
+            or key in fields_to_remove
+            or key in validation_fields
+        ):
             continue
 
         if key == "type" and isinstance(value, list):
             # Roo/Anthropic SDK 常见写法：type: ["string", "null"]
             # 下游（Proto 风格 Schema）通常要求 type 为单值字段，并使用 nullable 表达可空。
             has_null = any(
-                isinstance(t, str) and t.strip() and t.strip().lower() == "null" for t in value
+                isinstance(t, str) and t.strip() and t.strip().lower() == "null"
+                for t in value
             )
             non_null_types = [
                 t.strip()
@@ -207,7 +211,10 @@ def clean_json_schema(schema: Any) -> Any:
         elif isinstance(value, dict):
             cleaned[key] = clean_json_schema(value)
         elif isinstance(value, list):
-            cleaned[key] = [clean_json_schema(item) if isinstance(item, dict) else item for item in value]
+            cleaned[key] = [
+                clean_json_schema(item) if isinstance(item, dict) else item
+                for item in value
+            ]
         else:
             cleaned[key] = value
 
@@ -222,7 +229,9 @@ def clean_json_schema(schema: Any) -> Any:
     return cleaned
 
 
-def convert_tools(anthropic_tools: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+def convert_tools(
+    anthropic_tools: Optional[List[Dict[str, Any]]],
+) -> Optional[List[Dict[str, Any]]]:
     """
     将 Anthropic tools[] 转换为下游 tools（functionDeclarations）结构。
     """
@@ -269,7 +278,9 @@ def _extract_tool_result_output(content: Any) -> str:
     return str(content)
 
 
-def convert_messages_to_contents(messages: List[Dict[str, Any]], *, include_thinking: bool = True) -> List[Dict[str, Any]]:
+def convert_messages_to_contents(
+    messages: List[Dict[str, Any]], *, include_thinking: bool = True
+) -> List[Dict[str, Any]]:
     """
     将 Anthropic messages[] 转换为下游 contents[]（role: user/model, parts: []）。
 
@@ -430,7 +441,9 @@ def reorganize_tool_messages(contents: List[Dict[str, Any]]) -> List[Dict[str, A
             new_contents.append({"role": "model", "parts": [part]})
 
             if tool_id is not None and str(tool_id) in tool_results:
-                new_contents.append({"role": "user", "parts": [tool_results[str(tool_id)]]})
+                new_contents.append(
+                    {"role": "user", "parts": [tool_results[str(tool_id)]]}
+                )
 
             i += 1
             continue
@@ -507,7 +520,9 @@ def build_generation_config(payload: Dict[str, Any]) -> tuple[Dict[str, Any], bo
 
     stop_sequences = payload.get("stop_sequences")
     if isinstance(stop_sequences, list) and stop_sequences:
-        config["stopSequences"] = config["stopSequences"] + [str(s) for s in stop_sequences]
+        config["stopSequences"] = config["stopSequences"] + [
+            str(s) for s in stop_sequences
+        ]
 
     # Anthropic 的 extended thinking 并非默认开启；并且部分客户端（claude-cli / CherryStudio）
     # 可能会携带 `thinking: null`，或开启 thinking 但不回放历史 thinking blocks。
@@ -547,7 +562,7 @@ def build_generation_config(payload: Dict[str, Any]) -> tuple[Dict[str, Any], bo
                 "thinking",
                 "redacted_thinking",
             }:
-                if _anthropic_debug_enabled():
+                if anthropic_debug_enabled():
                     log.info(
                         "[ANTHROPIC][thinking] 请求显式启用 thinking，但历史 messages 未回放 "
                         "满足约束的 assistant thinking/redacted_thinking 起始块，已跳过下发 thinkingConfig（避免下游 400）"
@@ -560,13 +575,13 @@ def build_generation_config(payload: Dict[str, Any]) -> tuple[Dict[str, Any], bo
                 if isinstance(budget, int) and budget >= max_tokens:
                     adjusted_budget = max(0, max_tokens - 1)
                     if adjusted_budget <= 0:
-                        if _anthropic_debug_enabled():
+                        if anthropic_debug_enabled():
                             log.info(
                                 "[ANTHROPIC][thinking] thinkingBudget>=max_tokens 且无法下调到正数，"
                                 "已跳过下发 thinkingConfig（避免下游 400）"
                             )
                         return config, False
-                    if _anthropic_debug_enabled():
+                    if anthropic_debug_enabled():
                         log.info(
                             f"[ANTHROPIC][thinking] thinkingBudget>=max_tokens，自动下调 budget: "
                             f"{budget} -> {adjusted_budget}（max_tokens={max_tokens}）"
@@ -575,22 +590,28 @@ def build_generation_config(payload: Dict[str, Any]) -> tuple[Dict[str, Any], bo
 
             config["thinkingConfig"] = thinking_config
             should_include_thinking = include_thoughts
-            if _anthropic_debug_enabled():
+            if anthropic_debug_enabled():
                 log.info(
                     f"[ANTHROPIC][thinking] 已下发 thinkingConfig: includeThoughts="
                     f"{thinking_config.get('includeThoughts')}, thinkingBudget="
                     f"{thinking_config.get('thinkingBudget')}"
                 )
         else:
-            if _anthropic_debug_enabled():
-                log.info("[ANTHROPIC][thinking] thinking=null，视为未启用 thinking（不下发 thinkingConfig）")
+            if anthropic_debug_enabled():
+                log.info(
+                    "[ANTHROPIC][thinking] thinking=null，视为未启用 thinking（不下发 thinkingConfig）"
+                )
     else:
-        if _anthropic_debug_enabled():
-            log.info("[ANTHROPIC][thinking] 未提供 thinking 字段（不下发 thinkingConfig）")
+        if anthropic_debug_enabled():
+            log.info(
+                "[ANTHROPIC][thinking] 未提供 thinking 字段（不下发 thinkingConfig）"
+            )
     return config, should_include_thinking
 
 
-def convert_anthropic_request_to_antigravity_components(payload: Dict[str, Any]) -> Dict[str, Any]:
+def convert_anthropic_request_to_antigravity_components(
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
     """
     将 Anthropic Messages 请求转换为构造下游请求所需的组件。
 
@@ -610,7 +631,9 @@ def convert_anthropic_request_to_antigravity_components(payload: Dict[str, Any])
     generation_config, should_include_thinking = build_generation_config(payload)
 
     # 根据 thinking 配置转换消息
-    contents = convert_messages_to_contents(messages, include_thinking=should_include_thinking)
+    contents = convert_messages_to_contents(
+        messages, include_thinking=should_include_thinking
+    )
     contents = reorganize_tool_messages(contents)
     system_instruction = build_system_instruction(payload.get("system"))
     tools = convert_tools(payload.get("tools"))

@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # Pydantic v1/v2 兼容性辅助函数
@@ -10,7 +10,7 @@ def model_to_dict(model: BaseModel) -> Dict[str, Any]:
     - v1: model.dict()
     - v2: model.model_dump()
     """
-    if hasattr(model, 'model_dump'):
+    if hasattr(model, "model_dump"):
         # Pydantic v2
         return model.model_dump()
     else:
@@ -58,6 +58,10 @@ class OpenAIChatMessage(BaseModel):
 
 
 class OpenAIChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="allow"
+    )  # Allow additional fields not explicitly defined
+
     model: str
     messages: List[OpenAIChatMessage]
     stream: bool = False
@@ -74,9 +78,6 @@ class OpenAIChatCompletionRequest(BaseModel):
     enable_anti_truncation: Optional[bool] = False
     tools: Optional[List[OpenAITool]] = None
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None
-
-    class Config:
-        extra = "allow"  # Allow additional fields not explicitly defined
 
 
 # 通用的聊天完成请求模型（兼容OpenAI和其他格式）
@@ -141,7 +142,10 @@ class GeminiSystemInstruction(BaseModel):
 
 class GeminiImageConfig(BaseModel):
     """图片生成配置"""
-    aspect_ratio: Optional[str] = None  # "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"
+
+    aspect_ratio: Optional[str] = (
+        None  # "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"
+    )
     image_size: Optional[str] = None  # "1K", "2K", "4K"
 
 
@@ -169,6 +173,8 @@ class GeminiSafetySetting(BaseModel):
 
 
 class GeminiRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")  # 允许透传未定义的字段
+
     contents: List[GeminiContent]
     systemInstruction: Optional[GeminiSystemInstruction] = None
     generationConfig: Optional[GeminiGenerationConfig] = None
@@ -177,9 +183,6 @@ class GeminiRequest(BaseModel):
     toolConfig: Optional[Dict[str, Any]] = None
     cachedContent: Optional[str] = None
     enable_anti_truncation: Optional[bool] = False
-
-    class Config:
-        extra = "allow"  # 允许透传未定义的字段
 
 
 class GeminiCandidate(BaseModel):
@@ -303,3 +306,64 @@ class CredFileBatchActionRequest(BaseModel):
 
 class ConfigSaveRequest(BaseModel):
     config: dict
+
+
+# ====================== Anthropic Messages API Models ======================
+
+
+class AnthropicMessagesRequest(BaseModel):
+    """
+    Anthropic Messages API request model.
+
+    Based on: https://docs.anthropic.com/en/api/messages
+    """
+
+    model: str
+    max_tokens: int = Field(..., gt=0, description="Maximum tokens to generate")
+    messages: List[Dict[str, Any]] = Field(
+        ..., min_length=1, description="List of message objects"
+    )
+
+    # Optional fields
+    system: Optional[Union[str, List[Dict[str, Any]]]] = None
+    temperature: Optional[float] = Field(None, ge=0.0, le=1.0)
+    top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
+    top_k: Optional[int] = Field(None, ge=1)
+    stream: bool = False
+    stop_sequences: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+    # Extended thinking support
+    thinking: Optional[Union[bool, Dict[str, Any]]] = None
+
+    # Tool use
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None
+
+
+class AnthropicMessagesResponse(BaseModel):
+    """
+    Anthropic Messages API response model.
+
+    Based on: https://docs.anthropic.com/en/api/messages
+    """
+
+    id: str
+    type: str = "message"
+    role: str = "assistant"
+    model: str
+    content: List[Dict[str, Any]]
+    stop_reason: Optional[str] = None
+    stop_sequence: Optional[str] = None
+    usage: Dict[str, int]
+
+
+class AnthropicErrorResponse(BaseModel):
+    """
+    Anthropic error response model.
+
+    Based on: https://docs.anthropic.com/en/api/errors
+    """
+
+    type: str = "error"
+    error: Dict[str, str]

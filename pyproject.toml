@@ -100,3 +100,11 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
 ]
+# Note: We use --cov-fail-under in Makefile for thinking-related coverage
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+# Thinking-related files coverage targets:
+# - src/anthropic_streaming.py: 80%+ (currently 85%)
+# - src/antigravity_anthropic_router.py: thinking functions covered

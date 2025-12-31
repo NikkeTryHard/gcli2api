@@ -21,6 +21,7 @@ AUTO_BAN_ERROR_CODES = [403]
 
 # ====================== 配置系统 ======================
 
+
 async def init_config():
     """初始化配置缓存（启动时调用一次）"""
     global _config_cache, _config_initialized
@@ -30,6 +31,7 @@ async def init_config():
 
     try:
         from src.storage_adapter import get_storage_adapter
+
         storage_adapter = await get_storage_adapter()
         _config_cache = await storage_adapter.get_all_config()
         _config_initialized = True
@@ -45,10 +47,11 @@ async def reload_config():
 
     try:
         from src.storage_adapter import get_storage_adapter
+
         storage_adapter = await get_storage_adapter()
 
         # 如果后端支持 reload_config_cache，调用它
-        if hasattr(storage_adapter._backend, 'reload_config_cache'):
+        if hasattr(storage_adapter._backend, "reload_config_cache"):
             await storage_adapter._backend.reload_config_cache()
 
         # 重新加载配置缓存
@@ -63,7 +66,9 @@ def _get_cached_config(key: str, default: Any = None) -> Any:
     return _config_cache.get(key, default)
 
 
-async def get_config_value(key: str, default: Any = None, env_var: Optional[str] = None) -> Any:
+async def get_config_value(
+    key: str, default: Any = None, env_var: Optional[str] = None
+) -> Any:
     """Get configuration value with priority: ENV > Storage > default."""
     # 确保配置已初始化
     if not _config_initialized:
@@ -265,7 +270,9 @@ async def get_code_assist_endpoint() -> str:
     """
     return str(
         await get_config_value(
-            "code_assist_endpoint", "https://cloudcode-pa.googleapis.com", "CODE_ASSIST_ENDPOINT"
+            "code_assist_endpoint",
+            "https://cloudcode-pa.googleapis.com",
+            "CODE_ASSIST_ENDPOINT",
         )
     )
 
@@ -371,7 +378,9 @@ async def get_service_usage_api_url() -> str:
     """
     return str(
         await get_config_value(
-            "service_usage_api_url", "https://serviceusage.googleapis.com", "SERVICE_USAGE_API_URL"
+            "service_usage_api_url",
+            "https://serviceusage.googleapis.com",
+            "SERVICE_USAGE_API_URL",
         )
     )
 
@@ -393,3 +402,198 @@ async def get_antigravity_api_url() -> str:
             "ANTIGRAVITY_API_URL",
         )
     )
+
+
+# ====================== Timeout Configuration ======================
+
+
+async def get_request_timeout() -> float:
+    """
+    Get request timeout setting in seconds.
+
+    Used for non-streaming API requests.
+
+    Environment variable: REQUEST_TIMEOUT
+    Database config key: request_timeout
+    Default: 300.0 (5 minutes)
+    """
+    env_value = os.getenv("REQUEST_TIMEOUT")
+    if env_value:
+        try:
+            value = float(env_value)
+            return max(1.0, value)  # Minimum 1 second
+        except ValueError:
+            pass
+
+    db_value = await get_config_value("request_timeout")
+    if db_value is not None:
+        try:
+            return max(1.0, float(db_value))
+        except (ValueError, TypeError):
+            pass
+
+    return 300.0
+
+
+async def get_streaming_timeout() -> float:
+    """
+    Get streaming request timeout setting in seconds.
+
+    Used for streaming API requests which typically run longer.
+
+    Environment variable: STREAMING_TIMEOUT
+    Database config key: streaming_timeout
+    Default: 600.0 (10 minutes)
+    """
+    env_value = os.getenv("STREAMING_TIMEOUT")
+    if env_value:
+        try:
+            value = float(env_value)
+            return max(1.0, value)  # Minimum 1 second
+        except ValueError:
+            pass
+
+    db_value = await get_config_value("streaming_timeout")
+    if db_value is not None:
+        try:
+            return max(1.0, float(db_value))
+        except (ValueError, TypeError):
+            pass
+
+    return 600.0
+
+
+async def get_connection_timeout() -> float:
+    """
+    Get connection timeout setting in seconds.
+
+    Used for initial connection establishment.
+
+    Environment variable: CONNECTION_TIMEOUT
+    Database config key: connection_timeout
+    Default: 30.0
+    """
+    env_value = os.getenv("CONNECTION_TIMEOUT")
+    if env_value:
+        try:
+            value = float(env_value)
+            return max(1.0, value)  # Minimum 1 second
+        except ValueError:
+            pass
+
+    db_value = await get_config_value("connection_timeout")
+    if db_value is not None:
+        try:
+            return max(1.0, float(db_value))
+        except (ValueError, TypeError):
+            pass
+
+    return 30.0
+
+
+# ====================== Thinking Budget Configuration ======================
+
+
+async def get_anthropic_default_thinking_budget() -> int:
+    """
+    Get default thinking budget in tokens.
+
+    This is the default budget used when the client doesn't specify one.
+
+    Environment variable: ANTHROPIC_DEFAULT_THINKING_BUDGET
+    Database config key: anthropic_default_thinking_budget
+    Default: 1024
+    """
+    env_value = os.getenv("ANTHROPIC_DEFAULT_THINKING_BUDGET")
+    if env_value:
+        try:
+            value = int(env_value)
+            return max(1, value)  # Minimum 1 token
+        except ValueError:
+            pass
+
+    db_value = await get_config_value("anthropic_default_thinking_budget")
+    if db_value is not None:
+        try:
+            return max(1, int(db_value))
+        except (ValueError, TypeError):
+            pass
+
+    return 1024
+
+
+async def get_anthropic_max_thinking_budget() -> int:
+    """
+    Get maximum thinking budget in tokens.
+
+    Requests with higher budgets will be clamped to this value.
+
+    Environment variable: ANTHROPIC_MAX_THINKING_BUDGET
+    Database config key: anthropic_max_thinking_budget
+    Default: 32768
+    """
+    env_value = os.getenv("ANTHROPIC_MAX_THINKING_BUDGET")
+    if env_value:
+        try:
+            value = int(env_value)
+            return max(1, value)  # Minimum 1 token
+        except ValueError:
+            pass
+
+    db_value = await get_config_value("anthropic_max_thinking_budget")
+    if db_value is not None:
+        try:
+            return max(1, int(db_value))
+        except (ValueError, TypeError):
+            pass
+
+    return 32768
+
+
+async def get_anthropic_thinking_enabled() -> bool:
+    """
+    Get whether thinking mode is enabled globally.
+
+    When disabled, thinking blocks will be stripped or converted to text.
+
+    Environment variable: ANTHROPIC_THINKING_ENABLED
+    Database config key: anthropic_thinking_enabled
+    Default: True
+    """
+    env_value = os.getenv("ANTHROPIC_THINKING_ENABLED")
+    if env_value:
+        return env_value.lower() in ("true", "1", "yes", "on")
+
+    db_value = await get_config_value("anthropic_thinking_enabled")
+    if db_value is not None:
+        if isinstance(db_value, bool):
+            return db_value
+        if isinstance(db_value, str):
+            return db_value.lower() in ("true", "1", "yes", "on")
+
+    return True
+
+
+async def get_anthropic_thinking_to_text_fallback() -> bool:
+    """
+    Get whether to convert thinking blocks to text for unsupported clients.
+
+    When enabled and client doesn't support thinking, thinking content
+    is wrapped in <assistant_thinking> tags and prepended to the response.
+
+    Environment variable: ANTHROPIC_THINKING_TO_TEXT_FALLBACK
+    Database config key: anthropic_thinking_to_text_fallback
+    Default: True
+    """
+    env_value = os.getenv("ANTHROPIC_THINKING_TO_TEXT_FALLBACK")
+    if env_value:
+        return env_value.lower() in ("true", "1", "yes", "on")
+
+    db_value = await get_config_value("anthropic_thinking_to_text_fallback")
+    if db_value is not None:
+        if isinstance(db_value, bool):
+            return db_value
+        if isinstance(db_value, str):
+            return db_value.lower() in ("true", "1", "yes", "on")
+
+    return True
