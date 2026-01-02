@@ -581,25 +581,71 @@ gcli2api logs
 
 # View more log lines
 gcli2api logs -n 100
+
+# Live log streaming (Ctrl+C to exit)
+gcli2api logs --live
+
+# Live streaming with filters
+gcli2api logs --live --level error
+gcli2api logs --live --component ANTHROPIC
+
+# Filter by log level
+gcli2api logs --level warning
+
+# Filter by request ID
+gcli2api logs --reqid abc123
+
+# Filter by component
+gcli2api logs --component STREAMING
+
+# Show logs from last 5 minutes
+gcli2api logs --since 5m
+
+# Colorized output (auto-enabled for --live)
+gcli2api logs --color
+gcli2api logs --live --no-color  # Disable colors in live mode
 ```
 
-| Command              | Description                                |
-| -------------------- | ------------------------------------------ |
-| `gcli2api start`     | Start service in foreground                |
-| `gcli2api start -d`  | Start service in background (daemon mode)  |
-| `gcli2api stop`      | Stop the service (SIGTERM)                 |
-| `gcli2api stop -f`   | Force stop the service (SIGKILL)           |
-| `gcli2api restart`   | Restart the service (kills all on port)    |
-| `gcli2api status`    | Show service status, PID, and health check |
-| `gcli2api logs`      | Show last 50 log lines                     |
-| `gcli2api logs -n N` | Show last N log lines                      |
+| Command                      | Description                                |
+| ---------------------------- | ------------------------------------------ |
+| `gcli2api start`             | Start service in foreground                |
+| `gcli2api start -d`          | Start service in background (daemon mode)  |
+| `gcli2api stop`              | Stop the service (SIGTERM)                 |
+| `gcli2api stop -f`           | Force stop the service (SIGKILL)           |
+| `gcli2api restart`           | Restart the service (kills all on port)    |
+| `gcli2api status`            | Show service status, PID, and health check |
+| `gcli2api logs`              | Show last 50 log lines                     |
+| `gcli2api logs -n N`         | Show last N log lines                      |
+| `gcli2api logs --live`       | Live log streaming (Ctrl+C to exit)        |
+| `gcli2api logs -f`           | Same as --live                             |
+| `gcli2api logs -l LEVEL`     | Filter by level (debug/info/warning/error) |
+| `gcli2api logs -r REQID`     | Filter by request ID                       |
+| `gcli2api logs -c COMPONENT` | Filter by component                        |
+| `gcli2api logs -s TIME`      | Show logs since time (e.g., 5m, 1h, 30s)   |
+| `gcli2api logs --color`      | Enable colorized output                    |
+| `gcli2api logs --no-color`   | Disable colorized output                   |
+
+#### Log Colors
+
+When using `--live` or `--color`, logs are colorized for easier reading:
+
+| Element    | Color        |
+| ---------- | ------------ |
+| Timestamp  | Gray         |
+| DEBUG      | Cyan         |
+| INFO       | Green        |
+| WARNING    | Yellow       |
+| ERROR      | Red          |
+| CRITICAL   | Bold Magenta |
+| Component  | Blue         |
+| Request ID | Yellow       |
 
 > **File Locations**:
 >
 > - PID file: `~/.gcli2api/gcli2api.pid`
 > - Log file: `~/.gcli2api/gcli2api.log`
 >
-> **Code Reference**: See `cli.py` for implementation.
+> **Code Reference**: See `cli.py` and `cli_logs.py` for implementation.
 
 ---
 
@@ -1123,15 +1169,17 @@ make test-thinking
 make test-cov
 ```
 
-| Module                            | Test File                         | Coverage |
-| --------------------------------- | --------------------------------- | -------- |
-| `anthropic_streaming.py`          | `test_streaming_thinking.py`      | 86%      |
-| `antigravity_anthropic_router.py` | `test_router_helpers.py`          | 80%+     |
-| `anthropic_converter.py`          | `test_anthropic_converter.py`     | 80%+     |
-| `anthropic_converter.py`          | `test_thinking_handling.py`       | 80%+     |
-| `anthropic_converter.py`          | `test_function_call_signature.py` | 100%     |
+| Module                            | Test File                          | Coverage |
+| --------------------------------- | ---------------------------------- | -------- |
+| `anthropic_streaming.py`          | `test_streaming_thinking.py`       | 86%      |
+| `antigravity_anthropic_router.py` | `test_router_helpers.py`           | 80%+     |
+| `anthropic_converter.py`          | `test_anthropic_converter.py`      | 80%+     |
+| `anthropic_converter.py`          | `test_thinking_handling.py`        | 80%+     |
+| `anthropic_converter.py`          | `test_function_call_signature.py`  | 100%     |
+| `anthropic_converter.py`          | `test_model_mapping.py`            | 100%     |
+| `antigravity_api.py`              | `test_error_message_formatting.py` | 100%     |
 
-**Test Suite Summary**: 10 test files, 236+ test cases.
+**Test Suite Summary**: 12 test files, 275+ test cases.
 
 ---
 
@@ -1362,9 +1410,12 @@ python web.py
 
 ### CLI Log Viewer Tool
 
-A powerful CLI tool for searching and filtering logs:
+The log viewer is integrated into the main CLI (`gcli2api logs`) but can also be used directly for advanced filtering:
 
 ```bash
+# Direct usage (same as gcli2api logs)
+python cli_logs.py --reqid abc123
+
 # Filter by request ID
 python cli_logs.py --reqid abc123
 
@@ -1380,11 +1431,17 @@ python cli_logs.py --since 5m
 # Filter by component
 python cli_logs.py --component ANTHROPIC
 
-# Stream new logs (like tail -f)
-python cli_logs.py --follow
+# Live streaming with colors (Ctrl+C to exit)
+python cli_logs.py --live
+
+# Live streaming without colors
+python cli_logs.py --live --no-color
 
 # Combine filters
 python cli_logs.py --level error --since 1h --component STREAMING
+
+# Output as JSON
+python cli_logs.py --json
 ```
 
 | Option        | Description                                      |
@@ -1394,8 +1451,14 @@ python cli_logs.py --level error --since 1h --component STREAMING
 | `--level`     | Filter by level (debug/info/warning/error)       |
 | `--since`     | Time filter (e.g., `5m`, `1h`, `2d`)             |
 | `--component` | Filter by component (ANTHROPIC, STREAMING, etc.) |
-| `--follow`    | Stream new logs in real-time                     |
+| `--live`      | Live log streaming with colors (Ctrl+C to exit)  |
+| `--follow`    | Alias for --live                                 |
+| `--color`     | Enable colorized output (auto for --live)        |
+| `--no-color`  | Disable colorized output                         |
+| `--json`      | Output as JSON format                            |
 | `--log-file`  | Specify log file path (default: `LOG_FILE` env)  |
+
+> **Note**: For most use cases, prefer `gcli2api logs` which wraps this tool with the correct log file path.
 
 ---
 
@@ -1403,6 +1466,20 @@ python cli_logs.py --level error --since 1h --component STREAMING
 
 ### 2026-01-02
 
+- **feat**: Add live log streaming with colorized output (`gcli2api logs --live`)
+  - Real-time log streaming with graceful Ctrl+C exit
+  - Auto-colorized output (timestamp, log level, component, request ID)
+  - Filter flags: `--level`, `--reqid`, `--component`, `--since`
+  - Color control: `--color`, `--no-color`
+- **fix**: Log 429 rate limit errors as WARNING instead of ERROR
+  - 429 errors are expected rate limiting, not failures
+  - Clearer message: "Rate limited (429)" instead of "API error (429)"
+- **fix**: Improve error logging for httpx timeout exceptions
+  - Use `type(e).__name__` for exceptions with empty string representation
+- **feat**: Add `gemini-3-flash` support for Antigravity provider
+- **test**: Add comprehensive model mapping regression tests (31 tests)
+  - Prevents gemini-3-flash routing bug from regressing
+  - Tests for all supported models, special mappings, and fallbacks
 - **fix**: Add `thoughtSignature` to ALL `functionCall` parts for Gemini 3 compatibility
 - **chore**: Add remaining changes and comprehensive tests
 
