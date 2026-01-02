@@ -61,6 +61,10 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
+# Linter / Tool caches
+.ruff_cache/
+.mypy_cache/
+
 # Virtual environments
 .env
 .venv

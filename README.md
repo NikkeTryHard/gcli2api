@@ -17,6 +17,8 @@
 - [Architecture](#architecture)
 - [Features](#features)
 - [Installation](#installation)
+  - [Development Setup](#development-setup)
+  - [CLI Service Manager](#cli-service-manager)
 - [Configuration](#configuration)
 - [API Reference](#api-reference)
 - [Claude Code Integration (antigravity2claudecode)](#claude-code-integration-antigravity2claudecode)
@@ -197,16 +199,20 @@ flowchart LR
 
 ### API Endpoints and Format Support
 
-| Endpoint Type          | Path                                             | Format          | Description             |
-| ---------------------- | ------------------------------------------------ | --------------- | ----------------------- |
-| **OpenAI Compatible**  | `/v1/chat/completions`                           | OpenAI / Gemini | Auto-detect and convert |
-| **OpenAI Compatible**  | `/v1/models`                                     | OpenAI          | List available models   |
-| **Gemini Native**      | `/v1/models/{model}:generateContent`             | Gemini          | Non-streaming           |
-| **Gemini Native**      | `/v1/models/{model}:streamGenerateContent`       | Gemini          | Streaming               |
-| **Antigravity OpenAI** | `/antigravity/v1/chat/completions`               | OpenAI          | Antigravity backend     |
-| **Antigravity Gemini** | `/antigravity/v1/models/{model}:generateContent` | Gemini          | Antigravity backend     |
-| **Anthropic Messages** | `/v1/messages`                                   | Anthropic       | Claude Code compatible  |
-| **Anthropic Messages** | `/v1/messages/count_tokens`                      | Anthropic       | Token counting          |
+| Endpoint Type           | Path                                             | Format          | Description             |
+| ----------------------- | ------------------------------------------------ | --------------- | ----------------------- |
+| **OpenAI Compatible**   | `/v1/chat/completions`                           | OpenAI / Gemini | Auto-detect and convert |
+| **OpenAI Compatible**   | `/v1/models`                                     | OpenAI          | List available models   |
+| **Gemini Native**       | `/v1/models/{model}:generateContent`             | Gemini          | Non-streaming           |
+| **Gemini Native**       | `/v1/models/{model}:streamGenerateContent`       | Gemini          | Streaming               |
+| **Antigravity OpenAI**  | `/antigravity/v1/chat/completions`               | OpenAI          | Antigravity backend     |
+| **Antigravity Gemini**  | `/antigravity/v1/models/{model}:generateContent` | Gemini          | Antigravity backend     |
+| **Anthropic Messages**  | `/v1/messages`                                   | Anthropic       | Claude Code compatible  |
+| **Anthropic Messages**  | `/v1/messages/count_tokens`                      | Anthropic       | Token counting          |
+| **SD-WebUI Compatible** | `/sdapi/v1/txt2img`                              | SD-WebUI        | Text to image           |
+| **SD-WebUI Compatible** | `/sdapi/v1/sd-models`                            | SD-WebUI        | List SD models          |
+| **SD-WebUI Compatible** | `/sdapi/v1/options`                              | SD-WebUI        | Get SD options          |
+| **Health Check**        | `/keepalive`                                     | HEAD            | Server health check     |
 
 ### Supported Models
 
@@ -479,6 +485,48 @@ pip install -e .
 python web.py
 ```
 
+### Development Setup
+
+For development, install additional dependencies:
+
+```bash
+# Clone and setup
+git clone https://github.com/su-kaka/gcli2api.git
+cd gcli2api
+
+# Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install dev dependencies
+make install-dev
+# Or manually:
+pip install -e ".[dev]"
+pip install -r requirements-dev.txt
+```
+
+#### Makefile Commands
+
+| Command                    | Description                                        |
+| -------------------------- | -------------------------------------------------- |
+| `make help`                | Show all available commands                        |
+| `make install`             | Install production dependencies                    |
+| `make install-dev`         | Install development dependencies                   |
+| `make test`                | Run all tests                                      |
+| `make test-cov`            | Run tests with coverage report (HTML + terminal)   |
+| `make test-thinking`       | Run thinking-related tests (80% coverage required) |
+| `make lint`                | Run linters (flake8, mypy)                         |
+| `make format`              | Format code with black                             |
+| `make format-check`        | Check code formatting without changes              |
+| `make clean`               | Clean build artifacts and cache                    |
+| `make run`                 | Run the application (`python web.py`)              |
+| `make docker-build`        | Build Docker image                                 |
+| `make docker-run`          | Run Docker container                               |
+| `make docker-compose-up`   | Start services with docker-compose                 |
+| `make docker-compose-down` | Stop services with docker-compose                  |
+
+> **Code Reference**: See `Makefile` for implementation.
+
 ### Starting the Server
 
 ```bash
@@ -497,6 +545,54 @@ bash termux-start.sh
 source .venv/bin/activate
 python web.py
 ```
+
+### CLI Service Manager
+
+gcli2api includes a CLI tool for managing the service as a daemon:
+
+```bash
+# Start service in foreground
+gcli2api start
+
+# Start service in background (daemon mode)
+gcli2api start -d
+
+# Stop the service
+gcli2api stop
+
+# Force stop (SIGKILL)
+gcli2api stop -f
+
+# Restart the service
+gcli2api restart
+
+# Check service status
+gcli2api status
+
+# View recent logs (default: 50 lines)
+gcli2api logs
+
+# View more log lines
+gcli2api logs -n 100
+```
+
+| Command              | Description                                |
+| -------------------- | ------------------------------------------ |
+| `gcli2api start`     | Start service in foreground                |
+| `gcli2api start -d`  | Start service in background (daemon mode)  |
+| `gcli2api stop`      | Stop the service (SIGTERM)                 |
+| `gcli2api stop -f`   | Force stop the service (SIGKILL)           |
+| `gcli2api restart`   | Restart the service (kills all on port)    |
+| `gcli2api status`    | Show service status, PID, and health check |
+| `gcli2api logs`      | Show last 50 log lines                     |
+| `gcli2api logs -n N` | Show last N log lines                      |
+
+> **File Locations**:
+>
+> - PID file: `~/.gcli2api/gcli2api.pid`
+> - Log file: `~/.gcli2api/gcli2api.log`
+>
+> **Code Reference**: See `cli.py` for implementation.
 
 ---
 
@@ -601,6 +697,57 @@ curl -X POST "http://127.0.0.1:7861/v1/models/gemini-2.5-pro:generateContent" \
 **POST** `/v1/messages/count_tokens`
 
 See [Claude Code Integration](#claude-code-integration-antigravity2claudecode) for details.
+
+### SD-WebUI Compatible API
+
+gcli2api provides Stable Diffusion WebUI compatible endpoints for image generation using Gemini 3 Pro Image model.
+
+#### Endpoints
+
+| Method | Endpoint              | Description              |
+| ------ | --------------------- | ------------------------ |
+| GET    | `/sdapi/v1/options`   | Get current SD options   |
+| GET    | `/sdapi/v1/sd-models` | List available SD models |
+| POST   | `/sdapi/v1/txt2img`   | Generate image from text |
+
+> Also available under `/antigravity/sdapi/v1/...`
+
+#### Text to Image Request
+
+```json
+{
+  "prompt": "A beautiful sunset over mountains",
+  "negative_prompt": "blurry, low quality",
+  "width": 1024,
+  "height": 1024,
+  "steps": 20
+}
+```
+
+#### Response
+
+```json
+{
+  "images": ["base64_encoded_image_data..."],
+  "parameters": {
+    "prompt": "A beautiful sunset over mountains",
+    "negative_prompt": "blurry, low quality"
+  },
+  "info": "{\"model\": \"gemini-3-pro-image\"}"
+}
+```
+
+#### Model Suffixes for Image Generation
+
+| Suffix  | Resolution | Aspect Ratio |
+| ------- | ---------- | ------------ |
+| `-4k`   | 4K         | -            |
+| `-2k`   | 2K         | -            |
+| `-16x9` | -          | 16:9         |
+| `-9x16` | -          | 9:16         |
+| `-21x9` | -          | 21:9         |
+
+> **Code Reference**: See `src/antigravity_router.py:1399-1520` for implementation.
 
 ### Multimodal Support
 
@@ -1098,34 +1245,54 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
 | `RETRY_429_INTERVAL`           | `1.0`   | 429 retry interval (seconds)     |
 | `ANTI_TRUNCATION_MAX_ATTEMPTS` | `3`     | Max anti-truncation retries      |
 
-### Network & Proxy
-
-| Variable               | Default | Description                           |
-| ---------------------- | ------- | ------------------------------------- |
-| `PROXY`                | -       | HTTP/HTTPS proxy (`http://host:port`) |
-| `OAUTH_PROXY_URL`      | -       | OAuth authentication proxy endpoint   |
-| `GOOGLEAPIS_PROXY_URL` | -       | Google APIs proxy endpoint            |
-| `METADATA_SERVICE_URL` | -       | Metadata service proxy endpoint       |
-
-### Automation
-
-| Variable              | Default | Description                          |
-| --------------------- | ------- | ------------------------------------ |
-| `AUTO_BAN`            | `true`  | Enable credential auto-ban           |
-| `AUTO_LOAD_ENV_CREDS` | `false` | Auto-load env credentials on startup |
-
-### Compatibility
+### Timeout Configuration
 
 | Variable             | Default | Description                              |
 | -------------------- | ------- | ---------------------------------------- |
-| `COMPATIBILITY_MODE` | `false` | Convert system messages to user messages |
+| `REQUEST_TIMEOUT`    | `300.0` | Non-streaming request timeout (seconds)  |
+| `STREAMING_TIMEOUT`  | `600.0` | Streaming request timeout (seconds)      |
+| `CONNECTION_TIMEOUT` | `30.0`  | Initial connection establishment timeout |
+
+### Network & Proxy
+
+| Variable                   | Default                                             | Description                           |
+| -------------------------- | --------------------------------------------------- | ------------------------------------- |
+| `PROXY`                    | -                                                   | HTTP/HTTPS proxy (`http://host:port`) |
+| `OAUTH_PROXY_URL`          | `https://oauth2.googleapis.com`                     | OAuth authentication proxy endpoint   |
+| `GOOGLEAPIS_PROXY_URL`     | `https://www.googleapis.com`                        | Google APIs proxy endpoint            |
+| `CODE_ASSIST_ENDPOINT`     | `https://cloudcode-pa.googleapis.com`               | GCLI Code Assist API endpoint         |
+| `ANTIGRAVITY_API_URL`      | `https://daily-cloudcode-pa.sandbox.googleapis.com` | Antigravity API endpoint              |
+| `RESOURCE_MANAGER_API_URL` | `https://cloudresourcemanager.googleapis.com`       | Google Cloud Resource Manager API     |
+| `SERVICE_USAGE_API_URL`    | `https://serviceusage.googleapis.com`               | Google Cloud Service Usage API        |
+| `METADATA_SERVICE_URL`     | -                                                   | Metadata service proxy endpoint       |
+
+### Automation
+
+| Variable               | Default   | Description                                       |
+| ---------------------- | --------- | ------------------------------------------------- |
+| `AUTO_BAN`             | `true`    | Enable credential auto-ban                        |
+| `AUTO_BAN_ERROR_CODES` | `403`     | Error codes triggering auto-ban (comma-separated) |
+| `AUTO_LOAD_ENV_CREDS`  | `false`   | Auto-load env credentials on startup              |
+| `CREDENTIALS_DIR`      | `./creds` | Credentials directory path                        |
+
+> **Note**: `AUTO_BAN_ERROR_CODES` accepts comma-separated values (e.g., `400,403,429`). See `config.py:105-123` for implementation.
+
+### Compatibility
+
+| Variable                      | Default | Description                              |
+| ----------------------------- | ------- | ---------------------------------------- |
+| `COMPATIBILITY_MODE`          | `false` | Convert system messages to user messages |
+| `RETURN_THOUGHTS_TO_FRONTEND` | `true`  | Return thinking chain in API responses   |
 
 ### Logging
 
-| Variable    | Default        | Description                          |
-| ----------- | -------------- | ------------------------------------ |
-| `LOG_LEVEL` | `INFO`         | Log level (DEBUG/INFO/WARNING/ERROR) |
-| `LOG_FILE`  | `gcli2api.log` | Log file path                        |
+| Variable           | Default        | Description                          |
+| ------------------ | -------------- | ------------------------------------ |
+| `LOG_LEVEL`        | `INFO`         | Log level (DEBUG/INFO/WARNING/ERROR) |
+| `LOG_FILE`         | `gcli2api.log` | Log file path                        |
+| `LOG_FORMAT`       | `text`         | Log format (`text` or `json`)        |
+| `LOG_MAX_SIZE_MB`  | `10`           | Max log file size before rotation    |
+| `LOG_BACKUP_COUNT` | `5`            | Number of backup log files to keep   |
 
 ### Storage
 
@@ -1134,12 +1301,22 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
 | `MONGODB_URI`      | -          | MongoDB connection string (enables MongoDB mode) |
 | `MONGODB_DATABASE` | `gcli2api` | MongoDB database name                            |
 
+### Anthropic Thinking Configuration
+
+| Variable                              | Default | Description                                      |
+| ------------------------------------- | ------- | ------------------------------------------------ |
+| `ANTHROPIC_DEFAULT_THINKING_BUDGET`   | `1024`  | Default thinking budget (tokens)                 |
+| `ANTHROPIC_MAX_THINKING_BUDGET`       | `32768` | Maximum thinking budget (tokens)                 |
+| `ANTHROPIC_THINKING_ENABLED`          | `true`  | Enable thinking mode globally                    |
+| `ANTHROPIC_THINKING_TO_TEXT_FALLBACK` | `true`  | Convert thinking to text for unsupported clients |
+
 ### Debug (Anthropic)
 
-| Variable               | Default | Description                      |
-| ---------------------- | ------- | -------------------------------- |
-| `ANTHROPIC_DEBUG`      | -       | Enable verbose Anthropic logging |
-| `ANTHROPIC_DEBUG_BODY` | -       | Print request/response bodies    |
+| Variable                    | Default | Description                      |
+| --------------------------- | ------- | -------------------------------- |
+| `ANTHROPIC_DEBUG`           | -       | Enable verbose Anthropic logging |
+| `ANTHROPIC_DEBUG_BODY`      | -       | Print request/response bodies    |
+| `ANTHROPIC_DEBUG_MAX_CHARS` | -       | Truncate debug output (chars)    |
 
 ---
 
@@ -1175,6 +1352,43 @@ python web.py
 - **Server logs**: `gcli2api.log` (or `LOG_FILE` path)
 - **Real-time logs**: WebSocket at `/auth/logs/stream`
 - **Download logs**: GET `/auth/logs/download`
+
+### CLI Log Viewer Tool
+
+A powerful CLI tool for searching and filtering logs:
+
+```bash
+# Filter by request ID
+python cli_logs.py --reqid abc123
+
+# Show last 50 entries
+python cli_logs.py --tail 50
+
+# Filter by log level
+python cli_logs.py --level error
+
+# Show logs from last 5 minutes
+python cli_logs.py --since 5m
+
+# Filter by component
+python cli_logs.py --component ANTHROPIC
+
+# Stream new logs (like tail -f)
+python cli_logs.py --follow
+
+# Combine filters
+python cli_logs.py --level error --since 1h --component STREAMING
+```
+
+| Option        | Description                                      |
+| ------------- | ------------------------------------------------ |
+| `--reqid`     | Filter by request ID (X-Request-ID)              |
+| `--tail N`    | Show last N log entries                          |
+| `--level`     | Filter by level (debug/info/warning/error)       |
+| `--since`     | Time filter (e.g., `5m`, `1h`, `2d`)             |
+| `--component` | Filter by component (ANTHROPIC, STREAMING, etc.) |
+| `--follow`    | Stream new logs in real-time                     |
+| `--log-file`  | Specify log file path (default: `LOG_FILE` env)  |
 
 ---
 
