@@ -346,6 +346,8 @@ def show_logs(
     reqid: str | None = None,
     component: str | None = None,
     since: str | None = None,
+    color: bool = False,
+    no_color: bool = False,
 ):
     """Show recent logs using cli_logs.py for full functionality."""
     # Get the directory where this script is located
@@ -393,10 +395,17 @@ def show_logs(
         cmd.extend(["--component", component])
     if since:
         cmd.extend(["--since", since])
+    if color:
+        cmd.append("--color")
+    if no_color:
+        cmd.append("--no-color")
 
     try:
         # Run cli_logs.py, allowing it to handle signals for live mode
         subprocess.run(cmd)
+    except KeyboardInterrupt:
+        # Graceful exit on Ctrl+C
+        print("\nStopped.", file=sys.stderr)
     except Exception as e:
         print(f"Error reading logs: {e}")
 
@@ -482,6 +491,16 @@ Examples:
         "--since",
         help="Show logs since time (e.g., 5m, 1h, 30s)",
     )
+    logs_parser.add_argument(
+        "--color",
+        action="store_true",
+        help="Colorize output (auto-enabled for --live)",
+    )
+    logs_parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable colorized output",
+    )
 
     args = parser.parse_args()
 
@@ -512,6 +531,8 @@ Examples:
             reqid=args.reqid,
             component=args.component,
             since=args.since,
+            color=args.color,
+            no_color=args.no_color,
         )
 
 

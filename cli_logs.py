@@ -168,7 +168,30 @@ def filter_logs(
         yield parsed
 
 
-def format_output(entry: dict, json_mode: bool = False) -> str:
+# ANSI color codes
+COLORS = {
+    "reset": "\033[0m",
+    "bold": "\033[1m",
+    "dim": "\033[2m",
+    # Log levels
+    "debug": "\033[36m",  # Cyan
+    "info": "\033[32m",  # Green
+    "warning": "\033[33m",  # Yellow
+    "error": "\033[31m",  # Red
+    "critical": "\033[35;1m",  # Bold Magenta
+    # Components
+    "component": "\033[34m",  # Blue
+    "timestamp": "\033[90m",  # Gray
+    "reqid": "\033[33m",  # Yellow
+}
+
+
+def colorize(text: str, color: str) -> str:
+    """Apply ANSI color to text"""
+    return f"{COLORS.get(color, '')}{text}{COLORS['reset']}"
+
+
+def format_output(entry: dict, json_mode: bool = False, color: bool = False) -> str:
     """Format log entry for output"""
     if json_mode:
         import json
@@ -183,6 +206,26 @@ def format_output(entry: dict, json_mode: bool = False) -> str:
             },
             ensure_ascii=False,
         )
+    elif color:
+        # Colorized output
+        level = entry["level"]
+        level_color = COLORS.get(level, "")
+        level_upper = level.upper()
+
+        # Build colorized output
+        ts = colorize(f"[{entry['timestamp_str']}]", "timestamp")
+        lvl = f"{level_color}[{level_upper}]{COLORS['reset']}"
+
+        # Colorize component if present
+        msg = entry["message"]
+        if entry["component"]:
+            msg = msg.replace(f"[{entry['component']}]", colorize(f"[{entry['component']}]", "component"), 1)
+
+        # Colorize request ID if present
+        if entry["req_id"]:
+            msg = msg.replace(f"reqId={entry['req_id']}", f"reqId={colorize(entry['req_id'], 'reqid')}", 1)
+
+        return f"{ts} {lvl} {msg}"
     else:
         return entry["raw"]
 
@@ -214,6 +257,8 @@ Examples:
     parser.add_argument("--follow", "-f", action="store_true", help="Follow log file (like tail -f)")
     parser.add_argument("--live", action="store_true", help="Live log streaming (alias for --follow)")
     parser.add_argument("--json", "-j", action="store_true", help="Output as JSON")
+    parser.add_argument("--color", action="store_true", help="Colorize output (auto-enabled for --live)")
+    parser.add_argument("--no-color", action="store_true", help="Disable colorized output")
     parser.add_argument(
         "--log-file",
         default=None,
@@ -225,6 +270,9 @@ Examples:
     # --live is an alias for --follow
     if args.live:
         args.follow = True
+
+    # Auto-enable color for live/follow mode (unless --no-color or --json)
+    use_color = args.color or (args.follow and not args.no_color and not args.json)
 
     # Set up signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, _signal_handler)
@@ -261,7 +309,7 @@ Examples:
 
             initial_count = 0
             for entry in initial_filtered:
-                print(format_output(entry, args.json), flush=True)
+                print(format_output(entry, args.json, use_color), flush=True)
                 initial_count += 1
                 if initial_count >= args.tail:
                     break
@@ -285,7 +333,7 @@ Examples:
 
         count = 0
         for entry in filtered:
-            print(format_output(entry, args.json), flush=True)
+            print(format_output(entry, args.json, use_color), flush=True)
             count += 1
             if not args.follow and count >= args.tail:
                 break
