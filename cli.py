@@ -379,10 +379,11 @@ def show_logs(
     # Build command for cli_logs.py
     cmd = [python_cmd, str(cli_logs_py), "--log-file", str(LOG_FILE)]
 
+    # Always pass --tail for the number of initial lines to show
+    cmd.extend(["--tail", str(lines)])
+
     if live:
         cmd.append("--live")
-    else:
-        cmd.extend(["--tail", str(lines)])
 
     if level:
         cmd.extend(["--level", level])

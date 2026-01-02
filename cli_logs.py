@@ -246,8 +246,30 @@ Examples:
 
     try:
         if args.follow:
-            # Follow mode
+            # Follow mode: first show last N lines, then stream new ones
             print(f"Following {log_file}... (Ctrl+C to stop)", file=sys.stderr)
+
+            # First, show the last N lines (like tail -f does)
+            initial_lines = tail_log_file(log_file, args.tail * 10)  # Read extra for filtering
+            initial_filtered = filter_logs(
+                (line for line in initial_lines),
+                req_id=args.reqid,
+                level=args.level,
+                since=since_delta,
+                component=args.component,
+            )
+
+            initial_count = 0
+            for entry in initial_filtered:
+                print(format_output(entry, args.json), flush=True)
+                initial_count += 1
+                if initial_count >= args.tail:
+                    break
+
+            if initial_count > 0:
+                print("--- Live streaming new logs ---", file=sys.stderr, flush=True)
+
+            # Now stream new logs
             lines = follow_log_file(log_file)
         else:
             # Tail mode
@@ -263,7 +285,7 @@ Examples:
 
         count = 0
         for entry in filtered:
-            print(format_output(entry, args.json))
+            print(format_output(entry, args.json), flush=True)
             count += 1
             if not args.follow and count >= args.tail:
                 break
