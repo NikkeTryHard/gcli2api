@@ -85,9 +85,7 @@ class TestAntigravityApiErrorFormatting:
         """Verify the error formatting pattern exists in antigravity_api.py"""
         import os
 
-        api_file = os.path.join(
-            os.path.dirname(__file__), "..", "src", "antigravity_api.py"
-        )
+        api_file = os.path.join(os.path.dirname(__file__), "..", "src", "antigravity_api.py")
         with open(api_file, "r") as f:
             content = f.read()
 
@@ -99,12 +97,29 @@ class TestAntigravityApiErrorFormatting:
         """Verify the error formatting pattern exists in antigravity_anthropic_router.py"""
         import os
 
-        router_file = os.path.join(
-            os.path.dirname(__file__), "..", "src", "antigravity_anthropic_router.py"
-        )
+        router_file = os.path.join(os.path.dirname(__file__), "..", "src", "antigravity_anthropic_router.py")
         with open(router_file, "r") as f:
             content = f.read()
 
         # Check that the improved error formatting pattern is present
         assert "type(e).__name__" in content
         assert "error_msg = str(e) or type(e).__name__" in content
+
+
+class TestLogLevelForRateLimiting:
+    """Tests for appropriate log levels for rate limiting (429) errors"""
+
+    def test_429_logged_as_warning_in_antigravity_api(self):
+        """Verify that 429 errors are logged as WARNING, not ERROR"""
+        import os
+
+        api_file = os.path.join(os.path.dirname(__file__), "..", "src", "antigravity_api.py")
+        with open(api_file, "r") as f:
+            content = f.read()
+
+        # Check that 429 is logged as warning with appropriate message
+        assert 'log.warning(f"[ANTIGRAVITY] Rate limited (429):' in content
+
+        # Verify the pattern: 429 -> warning, other errors -> error
+        assert "if response.status_code == 429:" in content
+        assert "# 429 is expected rate limiting" in content
