@@ -290,12 +290,30 @@ def convert_messages_to_contents(
     """
     contents: List[Dict[str, Any]] = []
 
+    # Build a map of tool_use_id -> name from all tool_use messages
+    # This is needed because tool_result messages don't have a name field,
+    # but Gemini's functionResponse requires a name
+    tool_use_id_to_name: Dict[str, str] = {}
+    for msg in messages:
+        raw_content = msg.get("content", "")
+        if isinstance(raw_content, list):
+            for item in raw_content:
+                if isinstance(item, dict) and item.get("type") == "tool_use":
+                    tool_id = item.get("id")
+                    tool_name = item.get("name")
+                    if tool_id and tool_name:
+                        tool_use_id_to_name[tool_id] = tool_name
+
     for msg in messages:
         role = msg.get("role", "user")
         gemini_role = "model" if role == "assistant" else "user"
         raw_content = msg.get("content", "")
 
         parts: List[Dict[str, Any]] = []
+        # Track the last signature from thinking blocks in this message
+        # This will be attached to ALL functionCall parts in the same message
+        last_thinking_signature: Optional[str] = None
+
         if isinstance(raw_content, str):
             if _is_non_whitespace_text(raw_content):
                 parts = [{"text": str(raw_content)}]
@@ -319,6 +337,9 @@ def convert_messages_to_contents(
                     if not signature:
                         continue
 
+                    # Track the signature for potential use with functionCall
+                    last_thinking_signature = signature
+
                     thinking_text = item.get("thinking", "")
                     if thinking_text is None:
                         thinking_text = ""
@@ -336,6 +357,9 @@ def convert_messages_to_contents(
                     signature = item.get("signature")
                     if not signature:
                         continue
+
+                    # Track the signature for potential use with functionCall
+                    last_thinking_signature = signature
 
                     # redacted_thinking 的具体字段在不同客户端可能不同，这里尽量兼容 data/thinking。
                     thinking_text = item.get("thinking")
@@ -364,22 +388,40 @@ def convert_messages_to_contents(
                             }
                         )
                 elif item_type == "tool_use":
-                    parts.append(
-                        {
-                            "functionCall": {
-                                "id": item.get("id"),
-                                "name": item.get("name"),
-                                "args": item.get("input", {}) or {},
-                            }
+                    # Build the functionCall part
+                    fc_part: Dict[str, Any] = {
+                        "functionCall": {
+                            "id": item.get("id"),
+                            "name": item.get("name"),
+                            "args": item.get("input", {}) or {},
                         }
-                    )
+                    }
+                    # For Gemini 3 models, ALL functionCall parts require a thoughtSignature.
+                    # Attach the signature from the preceding thinking block if available,
+                    # otherwise use the dummy signature to skip validation.
+                    # See: https://ai.google.dev/gemini-api/docs/thought-signatures
+                    if last_thinking_signature:
+                        fc_part["thoughtSignature"] = last_thinking_signature
+                    else:
+                        # Use dummy signature for function calls without a thinking block
+                        fc_part["thoughtSignature"] = "skip_thought_signature_validator"
+                    parts.append(fc_part)
                 elif item_type == "tool_result":
                     output = _extract_tool_result_output(item.get("content"))
+                    tool_use_id = item.get("tool_use_id")
+                    # Look up the function name from the tool_use_id_to_name map
+                    # Fall back to item.get("name"), then to a generated name, then to "unknown_function"
+                    func_name = (
+                        tool_use_id_to_name.get(tool_use_id)
+                        or item.get("name")
+                        or (f"function_{tool_use_id}" if tool_use_id else None)
+                        or "unknown_function"
+                    )
                     parts.append(
                         {
                             "functionResponse": {
-                                "id": item.get("tool_use_id"),
-                                "name": item.get("name", ""),
+                                "id": tool_use_id,
+                                "name": func_name,
                                 "response": {"output": output},
                             }
                         }
