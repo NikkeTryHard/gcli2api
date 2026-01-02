@@ -199,9 +199,7 @@ def start_service(daemon: bool = False) -> bool:
     # Clean up any stale processes on the port before starting
     port_pid = find_process_by_port(DEFAULT_PORT)
     if port_pid:
-        print(
-            f"Found stale process on port {DEFAULT_PORT} (PID: {port_pid}), cleaning up..."
-        )
+        print(f"Found stale process on port {DEFAULT_PORT} (PID: {port_pid}), cleaning up...")
         try:
             os.kill(port_pid, signal.SIGTERM)
             time.sleep(1)
@@ -341,22 +339,63 @@ def show_status():
         print("  Start with: gcli2api start -d")
 
 
-def show_logs(lines: int = 50):
-    """Show recent logs."""
-    if not LOG_FILE.exists():
-        print(f"No log file found at {LOG_FILE}")
+def show_logs(
+    lines: int = 50,
+    live: bool = False,
+    level: str | None = None,
+    reqid: str | None = None,
+    component: str | None = None,
+    since: str | None = None,
+):
+    """Show recent logs using cli_logs.py for full functionality."""
+    # Get the directory where this script is located
+    script_dir = Path(__file__).parent.resolve()
+    cli_logs_py = script_dir / "cli_logs.py"
+    venv_python = script_dir / ".venv" / "bin" / "python"
+
+    # Use venv python if available, otherwise system python
+    python_cmd = str(venv_python) if venv_python.exists() else sys.executable
+
+    if not cli_logs_py.exists():
+        # Fallback to simple tail if cli_logs.py doesn't exist
+        if not LOG_FILE.exists():
+            print(f"No log file found at {LOG_FILE}")
+            return
+
+        try:
+            result = subprocess.run(
+                ["tail", "-n", str(lines), str(LOG_FILE)],
+                capture_output=True,
+                text=True,
+            )
+            if result.stdout:
+                print(result.stdout)
+            else:
+                print("Log file is empty.")
+        except Exception as e:
+            print(f"Error reading logs: {e}")
         return
 
+    # Build command for cli_logs.py
+    cmd = [python_cmd, str(cli_logs_py), "--log-file", str(LOG_FILE)]
+
+    if live:
+        cmd.append("--live")
+    else:
+        cmd.extend(["--tail", str(lines)])
+
+    if level:
+        cmd.extend(["--level", level])
+    if reqid:
+        cmd.extend(["--reqid", reqid])
+    if component:
+        cmd.extend(["--component", component])
+    if since:
+        cmd.extend(["--since", since])
+
     try:
-        result = subprocess.run(
-            ["tail", "-n", str(lines), str(LOG_FILE)],
-            capture_output=True,
-            text=True,
-        )
-        if result.stdout:
-            print(result.stdout)
-        else:
-            print("Log file is empty.")
+        # Run cli_logs.py, allowing it to handle signals for live mode
+        subprocess.run(cmd)
     except Exception as e:
         print(f"Error reading logs: {e}")
 
@@ -410,6 +449,38 @@ Examples:
         default=50,
         help="Number of lines to show (default: 50)",
     )
+    logs_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Stream logs in real-time (exit with Ctrl+C)",
+    )
+    logs_parser.add_argument(
+        "-f",
+        "--follow",
+        action="store_true",
+        help="Same as --live",
+    )
+    logs_parser.add_argument(
+        "-l",
+        "--level",
+        choices=["debug", "info", "warning", "error", "critical"],
+        help="Filter by log level",
+    )
+    logs_parser.add_argument(
+        "-r",
+        "--reqid",
+        help="Filter by request ID",
+    )
+    logs_parser.add_argument(
+        "-c",
+        "--component",
+        help="Filter by component (e.g., ANTHROPIC, STREAMING)",
+    )
+    logs_parser.add_argument(
+        "-s",
+        "--since",
+        help="Show logs since time (e.g., 5m, 1h, 30s)",
+    )
 
     args = parser.parse_args()
 
@@ -433,7 +504,14 @@ Examples:
         show_status()
 
     elif args.command == "logs":
-        show_logs(lines=args.lines)
+        show_logs(
+            lines=args.lines,
+            live=args.live or args.follow,
+            level=args.level,
+            reqid=args.reqid,
+            component=args.component,
+            since=args.since,
+        )
 
 
 if __name__ == "__main__":
