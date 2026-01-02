@@ -38,6 +38,7 @@ async def lifespan(app: FastAPI):
     # 初始化配置缓存（优先执行）
     try:
         import config
+
         await config.init_config()
         log.info("配置缓存初始化成功")
     except Exception as e:
@@ -105,7 +106,9 @@ app.include_router(gemini_router, prefix="", tags=["Gemini Native API"])
 app.include_router(antigravity_router, prefix="", tags=["Antigravity API"])
 
 # Antigravity Anthropic Messages 路由 - Anthropic Messages 格式兼容
-app.include_router(antigravity_anthropic_router, prefix="", tags=["Antigravity Anthropic Messages"])
+app.include_router(
+    antigravity_anthropic_router, prefix="", tags=["Antigravity Anthropic Messages"]
+)
 
 # Web路由 - 包含认证、凭证管理和控制面板功能
 app.include_router(web_router, prefix="", tags=["Web Interface"])
@@ -134,6 +137,7 @@ __all__ = ["app", "get_credential_manager"]
 
 async def main():
     """异步主启动函数"""
+    import signal
     from hypercorn.asyncio import serve
     from hypercorn.config import Config
 
@@ -169,7 +173,33 @@ async def main():
     # 增加启动超时时间以支持大量凭证的场景
     config.startup_timeout = 120  # 2分钟启动超时
 
-    await serve(app, config)
+    # 设置优雅关闭超时
+    config.graceful_timeout = 10  # 10秒优雅关闭超时
+
+    # 创建一个shutdown事件
+    shutdown_event = asyncio.Event()
+
+    def signal_handler(signum, frame):
+        """处理关闭信号"""
+        log.info(f"收到信号 {signum}, 准备关闭服务...")
+        shutdown_event.set()
+
+    # 注册信号处理器
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    try:
+        # 创建服务器任务
+        server_task = asyncio.create_task(
+            serve(app, config, shutdown_trigger=shutdown_event.wait)
+        )
+        await server_task
+    except asyncio.CancelledError:
+        log.info("服务器任务被取消")
+    except Exception as e:
+        log.error(f"服务器运行出错: {e}")
+    finally:
+        log.info("服务器已停止")
 
 
 if __name__ == "__main__":

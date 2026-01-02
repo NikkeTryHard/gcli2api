@@ -21,7 +21,6 @@ from src.utils import (
     should_include_thoughts,
 )
 from log import log
-from pydantic import BaseModel
 
 from .models import ChatCompletionRequest, model_to_dict
 
@@ -58,7 +57,10 @@ async def openai_request_to_gemini_payload(
                 message, all_messages=openai_request.messages
             )
             contents.append(
-                {"role": "user", "parts": [function_response]}  # Gemini 中工具响应作为 user 消息
+                {
+                    "role": "user",
+                    "parts": [function_response],
+                }  # Gemini 中工具响应作为 user 消息
             )
             continue
 
@@ -109,7 +111,18 @@ async def openai_request_to_gemini_payload(
                         if isinstance(tool_call.function.arguments, str)
                         else tool_call.function.arguments
                     )
-                    parts.append({"functionCall": {"name": tool_call.function.name, "args": args}})
+                    # For Gemini 3 models, functionCall parts require a thoughtSignature.
+                    # Use dummy signature to bypass validation when no thinking block is available.
+                    # See: https://ai.google.dev/gemini-api/docs/thought-signatures
+                    parts.append(
+                        {
+                            "functionCall": {
+                                "name": tool_call.function.name,
+                                "args": args,
+                            },
+                            "thoughtSignature": "skip_thought_signature_validator",
+                        }
+                    )
                     parsed_count += 1
                 except (json.JSONDecodeError, AttributeError) as e:
                     log.error(
@@ -202,7 +215,9 @@ async def openai_request_to_gemini_payload(
     # 如果有系统消息且未启用兼容性模式，添加systemInstruction
     if system_instructions and not compatibility_mode:
         combined_system_instruction = "\n\n".join(system_instructions)
-        request_data["systemInstruction"] = {"parts": [{"text": combined_system_instruction}]}
+        request_data["systemInstruction"] = {
+            "parts": [{"text": combined_system_instruction}]
+        }
 
     log.debug(
         f"Request prepared: {len(contents)} messages, compatibility_mode: {compatibility_mode}"
@@ -253,7 +268,9 @@ async def openai_request_to_gemini_payload(
 
     # 处理 tool_choice
     if hasattr(openai_request, "tool_choice") and openai_request.tool_choice:
-        request_data["toolConfig"] = convert_tool_choice_to_tool_config(openai_request.tool_choice)
+        request_data["toolConfig"] = convert_tool_choice_to_tool_config(
+            openai_request.tool_choice
+        )
 
     # 移除None值
     request_data = {k: v for k, v in request_data.items() if v is not None}
@@ -299,7 +316,9 @@ def _convert_usage_metadata(usage_metadata: Dict[str, Any]) -> Dict[str, int]:
     }
 
 
-def _build_message_with_reasoning(role: str, content: str, reasoning_content: str) -> dict:
+def _build_message_with_reasoning(
+    role: str, content: str, reasoning_content: str
+) -> dict:
     """构建包含可选推理内容的消息对象"""
     message = {"role": role, "content": content}
 
@@ -310,7 +329,9 @@ def _build_message_with_reasoning(role: str, content: str, reasoning_content: st
     return message
 
 
-def gemini_response_to_openai(gemini_response: Dict[str, Any], model: str) -> Dict[str, Any]:
+def gemini_response_to_openai(
+    gemini_response: Dict[str, Any], model: str
+) -> Dict[str, Any]:
     """
     将Gemini API响应转换为OpenAI聊天完成格式
 
@@ -413,7 +434,9 @@ def gemini_stream_chunk_to_openai(
         parts = candidate.get("content", {}).get("parts", [])
 
         # 提取工具调用和文本内容（流式响应需要 index 字段）
-        tool_calls, text_content = extract_tool_calls_from_parts(parts, is_streaming=True)
+        tool_calls, text_content = extract_tool_calls_from_parts(
+            parts, is_streaming=True
+        )
 
         # 提取 reasoning content
         reasoning_content = ""
@@ -522,7 +545,10 @@ def normalize_openai_request(
         标准化后的请求对象
     """
     # 限制max_tokens
-    if getattr(request_data, "max_tokens", None) is not None and request_data.max_tokens > 65535:
+    if (
+        getattr(request_data, "max_tokens", None) is not None
+        and request_data.max_tokens > 65535
+    ):
         request_data.max_tokens = 65535
 
     # 覆写 top_k 为 64
@@ -542,9 +568,9 @@ def normalize_openai_request(
                         if part.get("type") == "text" and part.get("text", "").strip():
                             has_valid_content = True
                             break
-                        elif part.get("type") == "image_url" and part.get("image_url", {}).get(
-                            "url"
-                        ):
+                        elif part.get("type") == "image_url" and part.get(
+                            "image_url", {}
+                        ).get("url"):
                             has_valid_content = True
                             break
                 if has_valid_content:
@@ -579,7 +605,9 @@ def create_health_check_response() -> Dict[str, Any]:
     Returns:
         健康检查响应字典
     """
-    return {"choices": [{"message": {"role": "assistant", "content": "gcli2api正常工作中"}}]}
+    return {
+        "choices": [{"message": {"role": "assistant", "content": "gcli2api正常工作中"}}]
+    }
 
 
 def extract_model_settings(model: str) -> Dict[str, Any]:
@@ -634,7 +662,6 @@ def _normalize_function_name(name: str) -> str:
     # 检查是否包含中文字符
     if re.search(r"[\u4e00-\u9fff]", name):
         try:
-
             # 将中文转换为拼音，用下划线连接多音字
             parts = []
             for char in name:
@@ -647,7 +674,9 @@ def _normalize_function_name(name: str) -> str:
                     parts.append(char)
             normalized = "".join(parts)
         except ImportError:
-            log.warning("pypinyin not installed, cannot convert Chinese characters to pinyin")
+            log.warning(
+                "pypinyin not installed, cannot convert Chinese characters to pinyin"
+            )
             normalized = name
     else:
         normalized = name
@@ -749,7 +778,8 @@ def _clean_schema_for_gemini(schema: Any) -> Any:
             cleaned[key] = _clean_schema_for_gemini(value)
         elif isinstance(value, list):
             cleaned[key] = [
-                _clean_schema_for_gemini(item) if isinstance(item, dict) else item for item in value
+                _clean_schema_for_gemini(item) if isinstance(item, dict) else item
+                for item in value
             ]
         else:
             cleaned[key] = value
@@ -802,7 +832,9 @@ def convert_openai_tools_to_gemini(openai_tools: List) -> List[Dict[str, Any]]:
 
         # 如果名称被修改了，记录日志
         if normalized_name != original_name:
-            log.info(f"Function name normalized: '{original_name}' -> '{normalized_name}'")
+            log.info(
+                f"Function name normalized: '{original_name}' -> '{normalized_name}'"
+            )
 
         # 构建 Gemini function declaration
         declaration = {
@@ -825,7 +857,9 @@ def convert_openai_tools_to_gemini(openai_tools: List) -> List[Dict[str, Any]]:
     return [{"functionDeclarations": function_declarations}]
 
 
-def convert_tool_choice_to_tool_config(tool_choice: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+def convert_tool_choice_to_tool_config(
+    tool_choice: Union[str, Dict[str, Any]],
+) -> Dict[str, Any]:
     """
     将 OpenAI tool_choice 转换为 Gemini toolConfig
 
@@ -858,7 +892,9 @@ def convert_tool_choice_to_tool_config(tool_choice: Union[str, Dict[str, Any]]) 
     return {"functionCallingConfig": {"mode": "AUTO"}}
 
 
-def convert_tool_message_to_function_response(message, all_messages: List = None) -> Dict[str, Any]:
+def convert_tool_message_to_function_response(
+    message, all_messages: List = None
+) -> Dict[str, Any]:
     """
     将 OpenAI 的 tool role 消息转换为 Gemini functionResponse
 
@@ -875,7 +911,9 @@ def convert_tool_message_to_function_response(message, all_messages: List = None
     try:
         # 尝试将 content 解析为 JSON
         response_data = (
-            json.loads(message.content) if isinstance(message.content, str) else message.content
+            json.loads(message.content)
+            if isinstance(message.content, str)
+            else message.content
         )
     except (json.JSONDecodeError, TypeError):
         # 如果不是有效的 JSON，包装为对象

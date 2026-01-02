@@ -600,7 +600,8 @@ class TestRedactForLog:
         from src.antigravity_anthropic_router import _redact_for_log
 
         data = {"data": "x" * 1000}
-        result = _redact_for_log(data, key_hint="data", max_chars=2000)
+        # Redact the data dict (triggers nested call with key_hint)
+        _redact_for_log(data, key_hint="data", max_chars=2000)
         # The key_hint is applied to nested calls
         data_with_hint = _redact_for_log("x" * 1000, key_hint="data", max_chars=2000)
         assert "<base64 len=" in data_with_hint

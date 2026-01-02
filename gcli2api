@@ -1,0 +1,13 @@
+#!/bin/bash
+# gcli2api - CLI wrapper for gcli2api service management
+# Add this to your PATH or create a symlink
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+CLI_SCRIPT="$SCRIPT_DIR/cli.py"
+
+if [ -f "$VENV_PYTHON" ]; then
+    exec "$VENV_PYTHON" "$CLI_SCRIPT" "$@"
+else
+    exec python3 "$CLI_SCRIPT" "$@"
+fi

@@ -1,68 +1,602 @@
-# GeminiCLI to API
+# gcli2api
 
-**将 GeminiCLI 和 antigravity 转换为 OpenAI 和 GEMINI API 接口**
+**GeminiCLI and Antigravity to OpenAI/Gemini/Anthropic API Proxy**
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: CNC-1.0](https://img.shields.io/badge/License-CNC--1.0-red.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-available-blue.svg)](https://github.com/su-kaka/gcli2api/pkgs/container/gcli2api)
+[![Deploy on Zeabur](https://zeabur.com/button.svg)](https://zeabur.com/templates/97VMEF?referralCode=su-kaka)
 
 [English](docs/README_EN.md) | 中文
 
-## 🚀 快速部署
+---
 
-## [![Deploy on Zeabur](https://zeabur.com/button.svg)](https://zeabur.com/templates/97VMEF?referralCode=su-kaka)
+## Table of Contents
 
-## ⚠️ 许可证声明
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Features](#features)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [API Reference](#api-reference)
+- [Claude Code Integration (antigravity2claudecode)](#claude-code-integration-antigravity2claudecode)
+- [Storage Backends](#storage-backends)
+- [Environment Variables](#environment-variables)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
-**本项目采用 Cooperative Non-Commercial License (CNC-1.0)**
+---
 
-这是一个反商业化的严格开源协议，详情请查看 [LICENSE](LICENSE) 文件。
+## Overview
 
-### ✅ 允许的用途：
+gcli2api is a Python-based API proxy server that converts GeminiCLI and Google Antigravity API requests into OpenAI, Gemini, and Anthropic API-compatible formats. It enables seamless integration with various LLM clients by providing a unified API interface.
 
-- 个人学习、研究、教育用途
-- 非营利组织使用
-- 开源项目集成（需遵循相同协议）
-- 学术研究和论文发表
+### Key Capabilities
 
-### ❌ 禁止的用途：
+- **Multi-format API support**: OpenAI, Gemini native, and Anthropic Messages API
+- **Claude Code CLI integration**: Direct connection via Anthropic Messages API
+- **Extended Thinking support**: Full thinking blocks, signatures, and budget control
+- **Credential management**: OAuth rotation, health monitoring, and auto-recovery
+- **Dual storage backends**: SQLite (default) and MongoDB for distributed deployments
+- **Web management console**: OAuth flows, credential management, real-time logs
 
-- 任何形式的商业使用
-- 年收入超过100万美元的企业使用
-- 风投支持或公开交易的公司使用
-- 提供付费服务或产品
-- 商业竞争用途
+---
 
-## 核心功能
+## Architecture
 
-### 🔄 API 端点和格式支持
+### System Overview
 
-**多端点双格式支持**
+```mermaid
+flowchart TB
+    subgraph Clients["API Clients"]
+        OAI[OpenAI Clients]
+        GEM[Gemini Clients]
+        CC[Claude Code CLI]
+        CURL[cURL / HTTP]
+    end
 
-- **OpenAI 兼容端点**：`/v1/chat/completions` 和 `/v1/models`
-  - 支持标准 OpenAI 格式（messages 结构）
-  - 支持 Gemini 原生格式（contents 结构）
-  - 自动格式检测和转换，无需手动切换
-  - 支持多模态输入（文本 + 图像）
-- **Gemini 原生端点**：`/v1/models/{model}:generateContent` 和 `streamGenerateContent`
-  - 支持完整的 Gemini 原生 API 规范
-  - 多种认证方式：Bearer Token、x-goog-api-key 头部、URL 参数 key
-- **Antigravity API 支持**：同时支持 OpenAI 和 Gemini 格式
-  - OpenAI 格式端点：`/antigravity/v1/chat/completions`
-  - Gemini 格式端点：`/antigravity/v1/models/{model}:generateContent` 和 `streamGenerateContent`
-  - 支持所有 Antigravity 模型（Claude、Gemini 等）
-  - 自动模型名称映射和思维模式检测
-- **Anthropic Messages API 支持（antigravity2claudecode）**：完整的 Claude 原生 API 兼容
-  - 原生端点：`/v1/messages` 和 `/v1/messages/count_tokens`
-  - 支持 Claude Code CLI 直接连接
-  - Extended Thinking 支持（思维块、签名、预算控制）
-  - 流式响应完整支持（SSE 格式）
-  - 工具调用（Tool Use）支持
-  - 自动 null 值清理和格式转换
+    subgraph Server["gcli2api Server :7861"]
+        direction TB
+        subgraph Routers["API Routers"]
+            OR[openai_router.py]
+            GR[gemini_router.py]
+            AGR[antigravity_router.py]
+            AAR[antigravity_anthropic_router.py]
+        end
 
-### 🖥️ antigravity2claudecode - Claude Code 集成
+        subgraph Core["Core Modules"]
+            FD[format_detector.py]
+            OT[openai_transfer.py]
+            AC[anthropic_converter.py]
+            AS[anthropic_streaming.py]
+            AT[anti_truncation.py]
+        end
 
-**完整技术架构**
+        subgraph Infra["Infrastructure"]
+            CM[credential_manager.py]
+            SM[state_manager.py]
+            TM[task_manager.py]
+            SA[storage_adapter.py]
+        end
+
+        subgraph Storage["Storage Layer"]
+            SQL[(SQLite)]
+            MDB[(MongoDB)]
+        end
+    end
+
+    subgraph External["External APIs"]
+        GCLI[GeminiCLI API]
+        AGAPI[Antigravity API]
+    end
+
+    OAI --> OR
+    GEM --> GR
+    CC --> AAR
+    CURL --> OR & GR & AGR & AAR
+
+    OR --> FD --> OT
+    GR --> OT
+    AGR --> OT
+    AAR --> AC --> AS
+
+    OT --> CM
+    AS --> CM
+    CM --> GCLI & AGAPI
+    CM --> SA
+    SA --> SQL & MDB
+```
+
+### Request Flow - Claude Code Integration
+
+```mermaid
+sequenceDiagram
+    participant CC as Claude Code CLI
+    participant AAR as antigravity_anthropic_router
+    participant AC as anthropic_converter
+    participant API as antigravity_api
+    participant CM as credential_manager
+    participant AS as anthropic_streaming
+    participant AG as Antigravity API
+
+    CC->>AAR: POST /v1/messages (Anthropic format)
+    AAR->>AAR: Validate x-api-key / Authorization
+    AAR->>AC: Convert request format
+    AC->>AC: Extract thinking params
+    AC->>AC: Transform messages to Gemini format
+    AC->>API: Send Gemini-format request
+    API->>CM: Get active credential
+    CM->>CM: OAuth token refresh if needed
+    API->>AG: Forward request with OAuth
+    AG-->>AS: SSE stream (Gemini format)
+
+    loop For each SSE chunk
+        AS->>AS: Parse Gemini SSE
+        AS->>AS: Convert to Anthropic format
+        AS->>AS: Handle thinking blocks
+        AS-->>CC: Anthropic SSE event
+    end
+
+    AS-->>CC: message_stop event
+```
+
+### Module Architecture
+
+```mermaid
+flowchart LR
+    subgraph API["API Layer"]
+        direction TB
+        A1[openai_router.py]
+        A2[gemini_router.py]
+        A3[antigravity_router.py]
+        A4[antigravity_anthropic_router.py]
+    end
+
+    subgraph Transform["Transformation Layer"]
+        direction TB
+        T1[format_detector.py]
+        T2[openai_transfer.py]
+        T3[anthropic_converter.py]
+        T4[anthropic_streaming.py]
+        T5[anthropic_helpers.py]
+    end
+
+    subgraph Infra["Infrastructure Layer"]
+        direction TB
+        I1[credential_manager.py]
+        I2[state_manager.py]
+        I3[task_manager.py]
+        I4[token_estimator.py]
+        I5[anti_truncation.py]
+    end
+
+    subgraph Storage["Storage Layer"]
+        direction TB
+        S1[storage_adapter.py]
+        S2[sqlite_manager.py]
+        S3[mongodb_manager.py]
+    end
+
+    subgraph Web["Web Console"]
+        direction TB
+        W1[web_routes.py]
+        W2[auth.py]
+    end
+
+    API --> Transform
+    Transform --> Infra
+    Infra --> Storage
+    Web --> Infra
+    Web --> Storage
+```
+
+---
+
+## Features
+
+### API Endpoints and Format Support
+
+| Endpoint Type          | Path                                             | Format          | Description             |
+| ---------------------- | ------------------------------------------------ | --------------- | ----------------------- |
+| **OpenAI Compatible**  | `/v1/chat/completions`                           | OpenAI / Gemini | Auto-detect and convert |
+| **OpenAI Compatible**  | `/v1/models`                                     | OpenAI          | List available models   |
+| **Gemini Native**      | `/v1/models/{model}:generateContent`             | Gemini          | Non-streaming           |
+| **Gemini Native**      | `/v1/models/{model}:streamGenerateContent`       | Gemini          | Streaming               |
+| **Antigravity OpenAI** | `/antigravity/v1/chat/completions`               | OpenAI          | Antigravity backend     |
+| **Antigravity Gemini** | `/antigravity/v1/models/{model}:generateContent` | Gemini          | Antigravity backend     |
+| **Anthropic Messages** | `/v1/messages`                                   | Anthropic       | Claude Code compatible  |
+| **Anthropic Messages** | `/v1/messages/count_tokens`                      | Anthropic       | Token counting          |
+
+### Supported Models
+
+#### GeminiCLI Models
+
+| Model                        | Context Window | Features                |
+| ---------------------------- | -------------- | ----------------------- |
+| `gemini-2.5-pro`             | 1M tokens      | Base model              |
+| `gemini-3-pro-preview`       | 1M tokens      | Preview model           |
+| `gemini-2.5-pro-maxthinking` | 1M tokens      | Maximum thinking budget |
+| `gemini-2.5-pro-nothinking`  | 1M tokens      | No thinking mode        |
+| `gemini-2.5-pro-search`      | 1M tokens      | Search-enhanced         |
+
+#### Antigravity Claude Models
+
+| Model ID                   | Alias             | Extended Thinking |
+| -------------------------- | ----------------- | ----------------- |
+| `claude-sonnet-4-20250514` | `claude-sonnet-4` | No                |
+| `claude-opus-4-20250514`   | `claude-opus-4`   | No                |
+| `claude-opus-4-5-20250514` | `claude-opus-4-5` | Yes               |
+
+### Special Model Variants
+
+| Suffix/Prefix | Example                     | Description               |
+| ------------- | --------------------------- | ------------------------- |
+| `-假流式`     | `gemini-2.5-pro-假流式`     | Fake streaming mode       |
+| `流式抗截断/` | `流式抗截断/gemini-2.5-pro` | Anti-truncation streaming |
+
+### Core Module Reference
+
+| Module                  | File                              | Description                                  |
+| ----------------------- | --------------------------------- | -------------------------------------------- |
+| **OpenAI Router**       | `openai_router.py`                | `/v1/chat/completions` endpoint handling     |
+| **Gemini Router**       | `gemini_router.py`                | Gemini native endpoint handling              |
+| **Antigravity Router**  | `antigravity_router.py`           | Antigravity OpenAI/Gemini endpoints          |
+| **Anthropic Router**    | `antigravity_anthropic_router.py` | `/v1/messages` Claude Code endpoint          |
+| **Format Detector**     | `format_detector.py`              | Auto-detect OpenAI vs Gemini format          |
+| **OpenAI Transfer**     | `openai_transfer.py`              | OpenAI <-> Gemini format conversion          |
+| **Anthropic Converter** | `anthropic_converter.py`          | Anthropic <-> Gemini format conversion       |
+| **Anthropic Streaming** | `anthropic_streaming.py`          | Gemini SSE -> Anthropic SSE conversion       |
+| **Anthropic Helpers**   | `anthropic_helpers.py`            | `remove_nulls_for_tool_input()`, debug utils |
+| **Credential Manager**  | `credential_manager.py`           | OAuth rotation, health monitoring            |
+| **State Manager**       | `state_manager.py`                | Atomic state operations, TOML persistence    |
+| **Task Manager**        | `task_manager.py`                 | Async task lifecycle management              |
+| **Token Estimator**     | `token_estimator.py`              | Input token estimation                       |
+| **Anti-Truncation**     | `anti_truncation.py`              | Response truncation detection and retry      |
+| **Storage Adapter**     | `storage_adapter.py`              | SQLite/MongoDB abstraction layer             |
+| **Web Routes**          | `web_routes.py`                   | REST API and WebSocket endpoints             |
+| **Auth**                | `auth.py`                         | OAuth 2.0 flows, JWT management              |
+
+---
+
+## Installation
+
+### Quick Install Scripts
+
+#### Linux
+
+```bash
+curl -o install.sh "https://raw.githubusercontent.com/su-kaka/gcli2api/refs/heads/master/install.sh" && chmod +x install.sh && ./install.sh
+```
+
+#### macOS
+
+```bash
+curl -o darwin-install.sh "https://raw.githubusercontent.com/su-kaka/gcli2api/refs/heads/master/darwin-install.sh" && chmod +x darwin-install.sh && ./darwin-install.sh
+```
+
+#### Windows (PowerShell)
+
+```powershell
+iex (iwr "https://raw.githubusercontent.com/su-kaka/gcli2api/refs/heads/master/install.ps1" -UseBasicParsing).Content
+```
+
+#### Termux (Android)
+
+```bash
+curl -o termux-install.sh "https://raw.githubusercontent.com/su-kaka/gcli2api/refs/heads/master/termux-install.sh" && chmod +x termux-install.sh && ./termux-install.sh
+```
+
+### Docker
+
+#### Basic Docker Run
+
+```bash
+# Single password mode
+docker run -d --name gcli2api \
+  --network host \
+  -e PASSWORD=pwd \
+  -e PORT=7861 \
+  -v $(pwd)/data/creds:/app/creds \
+  ghcr.io/su-kaka/gcli2api:latest
+
+# Separate API and panel passwords
+docker run -d --name gcli2api \
+  --network host \
+  -e API_PASSWORD=api_pwd \
+  -e PANEL_PASSWORD=panel_pwd \
+  -e PORT=7861 \
+  -v $(pwd)/data/creds:/app/creds \
+  ghcr.io/su-kaka/gcli2api:latest
+```
+
+#### Docker for macOS (no host networking)
+
+```bash
+docker run -d \
+  --name gcli2api \
+  -p 7861:7861 \
+  -p 8080:8080 \
+  -e PASSWORD=pwd \
+  -e PORT=7861 \
+  -v "$(pwd)/data/creds":/app/creds \
+  ghcr.io/su-kaka/gcli2api:latest
+```
+
+#### Docker Compose
+
+```yaml
+version: "3.8"
+
+services:
+  gcli2api:
+    image: ghcr.io/su-kaka/gcli2api:latest
+    container_name: gcli2api
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - PASSWORD=pwd
+      - PORT=7861
+      # Or use separate passwords:
+      # - API_PASSWORD=your_api_password
+      # - PANEL_PASSWORD=your_panel_password
+    volumes:
+      - ./data/creds:/app/creds
+    healthcheck:
+      test: ["CMD-SHELL", 'python -c "import sys, urllib.request, os; port = os.environ.get(''PORT'', ''7861''); req = urllib.request.Request(f''http://localhost:{port}/v1/models'', headers={''Authorization'': ''Bearer '' + os.environ.get(''PASSWORD'', ''pwd'')}); sys.exit(0 if urllib.request.urlopen(req, timeout=5).getcode() == 200 else 1)"']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+```
+
+### Manual Installation
+
+```bash
+# Clone repository
+git clone https://github.com/su-kaka/gcli2api.git
+cd gcli2api
+
+# Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -e .
+
+# Start server
+python web.py
+```
+
+### Starting the Server
+
+```bash
+# Linux/macOS
+cd gcli2api
+bash start.sh
+
+# Windows
+# Double-click start.bat
+
+# Termux
+cd gcli2api
+bash termux-start.sh
+
+# Manual
+source .venv/bin/activate
+python web.py
+```
+
+---
+
+## Configuration
+
+### Initial Setup
+
+1. Access the web console at `http://127.0.0.1:7861/auth`
+2. Login with default password: `pwd`
+3. Complete OAuth authentication:
+   - **GCLI Mode**: Google Cloud Gemini API credentials
+   - **Antigravity Mode**: Google Antigravity API credentials
+
+### Client Configuration
+
+#### OpenAI-Compatible Clients
+
+```
+Endpoint: http://127.0.0.1:7861/v1
+API Key: pwd (or your configured password)
+```
+
+#### Gemini Native Clients
+
+```
+Endpoint: http://127.0.0.1:7861
+Authentication (choose one):
+  - Authorization: Bearer your_api_password
+  - x-goog-api-key: your_api_password
+  - URL parameter: ?key=your_api_password
+```
+
+#### Claude Code CLI
+
+See [Claude Code Integration](#claude-code-integration-antigravity2claudecode) section.
+
+---
+
+## API Reference
+
+### OpenAI Compatible Endpoint
+
+**POST** `/v1/chat/completions`
+
+Supports both OpenAI and Gemini request formats with auto-detection.
+
+#### OpenAI Format Request
+
+```json
+{
+  "model": "gemini-2.5-pro",
+  "messages": [
+    { "role": "system", "content": "You are a helpful assistant" },
+    { "role": "user", "content": "Hello" }
+  ],
+  "temperature": 0.7,
+  "stream": true
+}
+```
+
+#### Gemini Format Request
+
+```json
+{
+  "model": "gemini-2.5-pro",
+  "contents": [{ "role": "user", "parts": [{ "text": "Hello" }] }],
+  "systemInstruction": {
+    "parts": [{ "text": "You are a helpful assistant" }]
+  },
+  "generationConfig": {
+    "temperature": 0.7
+  }
+}
+```
+
+### Gemini Native Endpoints
+
+**POST** `/v1/models/{model}:generateContent` (non-streaming)
+**POST** `/v1/models/{model}:streamGenerateContent` (streaming)
+**GET** `/v1/models` (list models)
+
+```bash
+curl -X POST "http://127.0.0.1:7861/v1/models/gemini-2.5-pro:generateContent" \
+  -H "x-goog-api-key: your_api_password" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contents": [
+      {"role": "user", "parts": [{"text": "Hello"}]}
+    ]
+  }'
+```
+
+### Antigravity Endpoints
+
+**POST** `/antigravity/v1/chat/completions` (OpenAI format)
+**POST** `/antigravity/v1/models/{model}:generateContent` (Gemini format)
+**POST** `/antigravity/v1/models/{model}:streamGenerateContent` (Gemini streaming)
+
+### Anthropic Messages Endpoint
+
+**POST** `/v1/messages`
+**POST** `/v1/messages/count_tokens`
+
+See [Claude Code Integration](#claude-code-integration-antigravity2claudecode) for details.
+
+### Multimodal Support
+
+```json
+{
+  "model": "gemini-2.5-pro",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "Describe this image" },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABA..."
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Thinking Mode
+
+```json
+{
+  "model": "gemini-2.5-pro-maxthinking",
+  "messages": [{ "role": "user", "content": "Complex math problem" }]
+}
+```
+
+Response includes separated thinking content:
+
+```json
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "Final answer",
+        "reasoning_content": "Detailed thinking process..."
+      }
+    }
+  ]
+}
+```
+
+### Web Console API
+
+#### Authentication
+
+| Method | Endpoint                    | Description             |
+| ------ | --------------------------- | ----------------------- |
+| POST   | `/auth/login`               | User login              |
+| POST   | `/auth/start`               | Start GCLI OAuth        |
+| POST   | `/auth/antigravity/start`   | Start Antigravity OAuth |
+| POST   | `/auth/callback`            | OAuth callback          |
+| GET    | `/auth/status/{project_id}` | Check auth status       |
+
+#### GCLI Credential Management
+
+| Method | Endpoint                        | Description               |
+| ------ | ------------------------------- | ------------------------- |
+| GET    | `/creds/status`                 | Get all credential status |
+| POST   | `/creds/action`                 | Single credential action  |
+| POST   | `/creds/batch-action`           | Batch credential actions  |
+| POST   | `/auth/upload`                  | Upload credentials (ZIP)  |
+| GET    | `/creds/download/{filename}`    | Download credential       |
+| GET    | `/creds/download-all`           | Download all credentials  |
+| POST   | `/creds/fetch-email/{filename}` | Fetch user email          |
+| POST   | `/creds/refresh-all-emails`     | Refresh all emails        |
+
+#### Antigravity Credential Management
+
+| Method | Endpoint                                 | Description               |
+| ------ | ---------------------------------------- | ------------------------- |
+| GET    | `/antigravity/creds/status`              | Get all credential status |
+| POST   | `/antigravity/creds/action`              | Single credential action  |
+| POST   | `/antigravity/creds/batch-action`        | Batch credential actions  |
+| POST   | `/antigravity/auth/upload`               | Upload credentials (ZIP)  |
+| GET    | `/antigravity/creds/download/{filename}` | Download credential       |
+| GET    | `/antigravity/creds/download-all`        | Download all credentials  |
+
+#### Configuration & Logs
+
+| Method    | Endpoint              | Description          |
+| --------- | --------------------- | -------------------- |
+| GET       | `/config/get`         | Get current config   |
+| POST      | `/config/save`        | Save config          |
+| POST      | `/auth/logs/clear`    | Clear logs           |
+| GET       | `/auth/logs/download` | Download log file    |
+| WebSocket | `/auth/logs/stream`   | Real-time log stream |
+
+#### Usage Statistics
+
+| Method | Endpoint               | Description          |
+| ------ | ---------------------- | -------------------- |
+| GET    | `/usage/stats`         | Get usage statistics |
+| GET    | `/usage/aggregated`    | Get aggregated stats |
+| POST   | `/usage/update-limits` | Update usage limits  |
+| POST   | `/usage/reset`         | Reset usage stats    |
+
+---
+
+## Claude Code Integration (antigravity2claudecode)
+
+### Architecture
 
 ```mermaid
 flowchart LR
@@ -91,58 +625,76 @@ flowchart LR
     CredMgr -.->|"Credential Rotation"| API
 ```
 
-**请求/响应数据流**
+### Quick Setup
 
-```mermaid
-sequenceDiagram
-    participant CC as Claude Code
-    participant Router as Router
-    participant Conv as Converter
-    participant API as Antigravity API
-    participant Stream as Streaming
+#### Step 1: Import Antigravity Credentials
 
-    CC->>Router: POST /v1/messages (Anthropic)
-    Router->>Router: Validate x-api-key
-    Router->>Conv: Convert Request
-    Conv->>Conv: Extract thinking params
-    Conv->>API: Send Gemini Request
-    API->>API: Get credential + OAuth refresh
-    API-->>Stream: Gemini SSE chunks
+```bash
+cd /path/to/gcli2api
+source .venv/bin/activate
 
-    loop For each SSE chunk
-        Stream->>Stream: Convert to Anthropic format
-        Stream-->>CC: Anthropic SSE event
-    end
+# Method 1: Script import
+python3 << 'EOF'
+import asyncio, glob, json
+from src.storage_adapter import get_storage_adapter
 
-    Stream-->>CC: message_stop
+async def import_creds():
+    adapter = await get_storage_adapter()
+    for f in glob.glob("creds/ag_*.json"):
+        with open(f) as fh:
+            data = json.load(fh)
+        await adapter.store_credential(f.split('/')[-1], data, is_antigravity=True)
+        print(f"Imported: {f}")
+
+asyncio.run(import_creds())
+EOF
+
+# Method 2: Web interface
+# Visit http://localhost:7861/auth and upload ZIP file
 ```
 
-**请求转换流程**
+#### Step 2: Configure Shell Alias
 
-1. Claude Code 发送 Anthropic Messages API 请求到 `localhost:7861/v1/messages`
-2. gcli2api 接收请求，验证 API 密钥（`x-api-key` 或 `Authorization: Bearer`）
-3. `anthropic_converter.py` 将 Anthropic 请求格式转换为 Antigravity/Gemini 格式
-4. `antigravity_api.py` 通过 Google OAuth 凭证向 Antigravity API 发送请求
-5. `anthropic_streaming.py` 将 Gemini SSE 响应实时转换为 Anthropic SSE 格式
-6. Claude Code 接收标准 Anthropic 流式响应
+```bash
+cat >> ~/.bashrc << 'EOF'
 
-**核心模块说明**
+# === gcli2api + Claude Code (antigravity2claudecode) ===
+alias gcli='cd /path/to/gcli2api && source .venv/bin/activate && python web.py'
 
-| 模块       | 文件                              | 功能                                                         |
-| ---------- | --------------------------------- | ------------------------------------------------------------ |
-| 路由层     | `antigravity_anthropic_router.py` | 处理 `/v1/messages` 端点，认证验证，请求分发                 |
-| 格式转换   | `anthropic_converter.py`          | Anthropic ↔ Gemini 格式双向转换，thinking 参数处理           |
-| 流式处理   | `anthropic_streaming.py`          | Gemini SSE → Anthropic SSE 实时转换，thinking 块处理         |
-| 共享工具   | `anthropic_helpers.py`            | `remove_nulls_for_tool_input()`, `anthropic_debug_enabled()` |
-| API 客户端 | `antigravity_api.py`              | Google Antigravity API 请求封装，凭证轮换                    |
-| Token 估算 | `token_estimator.py`              | 输入 token 预估算（用于 message_start 事件）                 |
+gclaude() {
+    ANTHROPIC_AUTH_TOKEN="" \
+    ANTHROPIC_BASE_URL="http://localhost:7861" \
+    ANTHROPIC_API_KEY="pwd" \
+    claude "$@"
+}
+EOF
 
-**Extended Thinking 支持**
+source ~/.bashrc
+```
 
-gcli2api 完整支持 Claude 的 Extended Thinking 功能：
+#### Step 3: Run
+
+```bash
+# Terminal 1: Start gcli2api server
+gcli
+
+# Terminal 2: Start Claude Code
+gclaude
+```
+
+### Environment Variables for Claude Code
+
+| Variable               | Description                                | Required |
+| ---------------------- | ------------------------------------------ | -------- |
+| `ANTHROPIC_BASE_URL`   | gcli2api server address                    | Yes      |
+| `ANTHROPIC_API_KEY`    | API password (matches gcli2api `PASSWORD`) | Yes      |
+| `ANTHROPIC_AUTH_TOKEN` | Must be empty string to disable OAuth      | Yes      |
+
+### Extended Thinking Support
+
+gcli2api fully supports Claude's Extended Thinking feature:
 
 ```json
-// 请求示例 - 启用 thinking
 {
   "model": "claude-opus-4-5-20250514",
   "max_tokens": 16000,
@@ -154,13 +706,15 @@ gcli2api 完整支持 Claude 的 Extended Thinking 功能：
 }
 ```
 
-**Thinking 处理逻辑：**
+#### Thinking Processing Logic
 
-- `client_thinking_enabled=True`：原样输出 thinking 块（`content_block_start` type=thinking）
-- `client_thinking_enabled=False, thinking_to_text=True`：将 thinking 转换为 `<assistant_thinking>` 标签包裹的文本
-- `client_thinking_enabled=False, thinking_to_text=False`：完全过滤 thinking 内容
+| Condition                                               | Behavior                                                           |
+| ------------------------------------------------------- | ------------------------------------------------------------------ |
+| `client_thinking_enabled=True`                          | Output thinking blocks as-is (`content_block_start` type=thinking) |
+| `client_thinking_enabled=False, thinking_to_text=True`  | Convert thinking to `<assistant_thinking>` wrapped text            |
+| `client_thinking_enabled=False, thinking_to_text=False` | Filter out thinking content completely                             |
 
-**流式响应事件序列**
+### Streaming Response Event Sequence
 
 ```
 event: message_start
@@ -194,10 +748,9 @@ event: message_stop
 data: {"type":"message_stop"}
 ```
 
-**工具调用（Tool Use）支持**
+### Tool Use Support
 
 ```json
-// 请求示例
 {
   "model": "claude-sonnet-4-20250514",
   "max_tokens": 1024,
@@ -218,101 +771,16 @@ data: {"type":"message_stop"}
 }
 ```
 
-**Tool Use 响应处理：**
+Tool use response handling:
 
-- 自动生成 `tool_use` 块，包含 `id`、`name`、`input`
-- `input` 字段自动清理 null 值（防止下游解析错误）
-- `stop_reason` 自动设置为 `"tool_use"`
+- Auto-generates `tool_use` blocks with `id`, `name`, `input`
+- `input` field auto-cleans null values (prevents downstream parsing errors)
+- `stop_reason` auto-set to `"tool_use"`
 
----
-
-**快速配置 Claude Code**
-
-**步骤 1：导入 Antigravity 凭证**
+### Testing
 
 ```bash
-cd /path/to/gcli2api
-source .venv/bin/activate
-
-# 方式 1：通过脚本导入 JSON 凭证
-python3 << 'EOF'
-import asyncio, glob, json
-from src.storage_adapter import get_storage_adapter
-
-async def import_creds():
-    adapter = await get_storage_adapter()
-    for f in glob.glob("creds/ag_*.json"):
-        with open(f) as fh:
-            data = json.load(fh)
-        await adapter.store_credential(f.split('/')[-1], data, is_antigravity=True)
-        print(f"Imported: {f}")
-
-asyncio.run(import_creds())
-EOF
-
-# 方式 2：通过 Web 界面上传
-# 访问 http://localhost:7861/auth 上传 ZIP 文件
-```
-
-**步骤 2：配置 Shell 别名**
-
-```bash
-cat >> ~/.bashrc << 'EOF'
-
-# === gcli2api + Claude Code (antigravity2claudecode) ===
-alias gcli='cd /path/to/gcli2api && source .venv/bin/activate && python web.py'
-
-gclaude() {
-    ANTHROPIC_AUTH_TOKEN="" \
-    ANTHROPIC_BASE_URL="http://localhost:7861" \
-    ANTHROPIC_API_KEY="pwd" \
-    claude "$@"
-}
-EOF
-
-source ~/.bashrc
-```
-
-**步骤 3：运行**
-
-```bash
-# 终端 1：启动 gcli2api 服务器
-gcli
-
-# 终端 2：启动 Claude Code
-gclaude
-```
-
-**环境变量说明**
-
-| 变量                   | 说明                                         | 必需 |
-| ---------------------- | -------------------------------------------- | ---- |
-| `ANTHROPIC_BASE_URL`   | gcli2api 服务器地址                          | 是   |
-| `ANTHROPIC_API_KEY`    | API 密码（对应 gcli2api 的 `PASSWORD` 配置） | 是   |
-| `ANTHROPIC_AUTH_TOKEN` | 必须设为空字符串以禁用 OAuth token           | 是   |
-
-**支持的 Claude 模型**
-
-| 模型 ID                    | 别名              | Extended Thinking |
-| -------------------------- | ----------------- | ----------------- |
-| `claude-sonnet-4-20250514` | `claude-sonnet-4` | 否                |
-| `claude-opus-4-20250514`   | `claude-opus-4`   | 否                |
-| `claude-opus-4-5-20250514` | `claude-opus-4-5` | 是                |
-
-**调试模式**
-
-```bash
-# 启用详细日志
-export ANTHROPIC_DEBUG=1
-export ANTHROPIC_DEBUG_BODY=1  # 打印请求/响应体（注意：可能包含大量数据）
-
-gcli
-```
-
-**测试连接**
-
-```bash
-# 测试 API 端点
+# Test API endpoint
 curl -X POST http://localhost:7861/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: pwd" \
@@ -322,7 +790,7 @@ curl -X POST http://localhost:7861/v1/messages \
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 
-# 测试 token 计数
+# Test token counting
 curl -X POST http://localhost:7861/v1/messages/count_tokens \
   -H "Content-Type: application/json" \
   -H "x-api-key: pwd" \
@@ -332,418 +800,76 @@ curl -X POST http://localhost:7861/v1/messages/count_tokens \
   }'
 ```
 
-**测试覆盖率**
-
-antigravity2claudecode 模块具有完整的测试覆盖：
+### Debug Mode
 
 ```bash
-# 运行所有测试
+export ANTHROPIC_DEBUG=1
+export ANTHROPIC_DEBUG_BODY=1  # Print request/response bodies (may be large)
+
+gcli
+```
+
+### Test Coverage
+
+```bash
+# Run all tests
 make test
 
-# 运行 thinking 相关测试（要求 80% 覆盖率）
+# Run thinking-related tests (80% coverage required)
 make test-thinking
 
-# 查看覆盖率报告
+# View coverage report
 make test-cov
 ```
 
-| 模块                              | 测试文件                     | 覆盖率 |
-| --------------------------------- | ---------------------------- | ------ |
-| `anthropic_streaming.py`          | `test_streaming_thinking.py` | 86%    |
-| `antigravity_anthropic_router.py` | `test_router_helpers.py`     | 80%+   |
-| `anthropic_converter.py`          | `test_thinking_handling.py`  | 80%+   |
-
-### 🔐 认证和安全管理
-
-**灵活的密码管理**
-
-- **分离密码支持**：API 密码（聊天端点）和控制面板密码可独立设置
-- **多种认证方式**：支持 Authorization Bearer、x-goog-api-key 头部、URL 参数等
-- **JWT Token 认证**：控制面板支持 JWT 令牌认证
-- **用户邮箱获取**：自动获取和显示 Google 账户邮箱地址
-
-### 📊 智能凭证管理系统
-
-**高级凭证管理**
-
-- 多个 Google OAuth 凭证自动轮换
-- 通过冗余认证增强稳定性
-- 负载均衡与并发请求支持
-- 自动故障检测和凭证禁用
-- 凭证使用统计和配额管理
-- 支持手动启用/禁用凭证文件
-- 批量凭证文件操作（启用、禁用、删除）
-
-**凭证状态监控**
-
-- 实时凭证健康检查
-- 错误码追踪（429、403、500 等）
-- 自动封禁机制（可配置）
-- 凭证轮换策略（基于调用次数）
-- 使用统计和配额监控
-
-### 🌊 流式传输和响应处理
-
-**多种流式支持**
-
-- 真正的实时流式响应
-- 假流式模式（用于兼容性）
-- 流式抗截断功能（防止回答被截断）
-- 异步任务管理和超时处理
-
-**响应优化**
-
-- 思维链（Thinking）内容分离
-- 推理过程（reasoning_content）处理
-- 多轮对话上下文管理
-- 兼容性模式（将 system 消息转换为 user 消息）
-
-### 🎛️ Web 管理控制台
-
-**全功能 Web 界面**
-
-- OAuth 认证流程管理（支持 GCLI 和 Antigravity 双模式）
-- 凭证文件上传、下载、管理
-- 实时日志查看（WebSocket）
-- 系统配置管理
-- 使用统计和监控面板
-- 移动端适配界面
-
-**批量操作支持**
-
-- ZIP 文件批量上传凭证（GCLI 和 Antigravity）
-- 批量启用/禁用/删除凭证
-- 批量获取用户邮箱
-- 批量配置管理
-- 统一批量上传界面管理所有凭证类型
-
-### 📈 使用监控
-
-**实时监控**
-
-- WebSocket 实时日志流
-- 系统状态监控
-- 凭证健康状态
-- API 调用成功率统计
-
-### 🔧 高级配置和自定义
-
-**网络和代理配置**
-
-- HTTP/HTTPS 代理支持
-- 代理端点配置（OAuth、Google APIs、元数据服务）
-- 超时和重试配置
-- 网络错误处理和恢复
-
-**性能和稳定性配置**
-
-- 429 错误自动重试（可配置间隔和次数）
-- 抗截断最大重试次数
-- 凭证轮换策略
-- 并发请求管理
-
-**日志和调试**
-
-- 多级日志系统（DEBUG、INFO、WARNING、ERROR）
-- 日志文件管理
-- 实时日志流
-- 日志下载和清空
-
-### 🔄 环境变量和配置管理
-
-**灵活的配置方式**
-
-- 环境变量配置
-- 热配置更新（部分配置项）
-- 配置锁定（环境变量优先级）
-
-## 支持的模型
-
-所有模型均具备 1M 上下文窗口容量。每个凭证文件提供 1000 次请求额度。
-
-### 🤖 基础模型
-
-- `gemini-2.5-pro`
-- `gemini-3-pro-preview`
-
-### 🧠 思维模型（Thinking Models）
-
-- `gemini-2.5-pro-maxthinking`：最大思考预算模式
-- `gemini-2.5-pro-nothinking`：无思考模式
-- 支持自定义思考预算配置
-- 自动分离思维内容和最终回答
-
-### 🔍 搜索增强模型
-
-- `gemini-2.5-pro-search`：集成搜索功能的模型
-
-### 🌊 特殊功能变体
-
-- **假流式模式**：在任何模型名称后添加 `-假流式` 后缀
-  - 例：`gemini-2.5-pro-假流式`
-  - 用于需要流式响应但服务端不支持真流式的场景
-- **流式抗截断模式**：在模型名称前添加 `流式抗截断/` 前缀
-  - 例：`流式抗截断/gemini-2.5-pro`
-  - 自动检测响应截断并重试，确保完整回答
-
-### 🔧 模型功能自动检测
-
-- 系统自动识别模型名称中的功能标识
-- 透明地处理功能模式转换
-- 支持功能组合使用
+| Module                            | Test File                    | Coverage |
+| --------------------------------- | ---------------------------- | -------- |
+| `anthropic_streaming.py`          | `test_streaming_thinking.py` | 86%      |
+| `antigravity_anthropic_router.py` | `test_router_helpers.py`     | 80%+     |
+| `anthropic_converter.py`          | `test_thinking_handling.py`  | 80%+     |
 
 ---
 
-## 安装指南
+## Storage Backends
 
-### Termux 环境
+### SQLite (Default)
 
-**初始安装**
+- No configuration required
+- Data stored in local SQLite database
+- Suitable for single-machine deployments
+- Auto-creates and manages database files
 
-```bash
-curl -o termux-install.sh "https://raw.githubusercontent.com/su-kaka/gcli2api/refs/heads/master/termux-install.sh" && chmod +x termux-install.sh && ./termux-install.sh
-```
+### MongoDB (Cloud/Distributed)
 
-**重启服务**
+Enable MongoDB for multi-instance or cloud deployments.
 
-```bash
-cd gcli2api
-bash termux-start.sh
-```
-
-### Windows 环境
-
-**初始安装**
-
-```powershell
-iex (iwr "https://raw.githubusercontent.com/su-kaka/gcli2api/refs/heads/master/install.ps1" -UseBasicParsing).Content
-```
-
-**重启服务**
-双击执行 `start.bat`
-
-### Linux 环境
-
-**初始安装**
+#### Configuration
 
 ```bash
-curl -o install.sh "https://raw.githubusercontent.com/su-kaka/gcli2api/refs/heads/master/install.sh" && chmod +x install.sh && ./install.sh
-```
-
-**重启服务**
-
-```bash
-cd gcli2api
-bash start.sh
-```
-
-### macOS 环境
-
-**初始安装**
-
-```bash
-curl -o darwin-install.sh "https://raw.githubusercontent.com/su-kaka/gcli2api/refs/heads/master/darwin-install.sh" && chmod +x darwin-install.sh && ./darwin-install.sh
-```
-
-**重启服务**
-
-```bash
-cd gcli2api
-bash start.sh
-```
-
-### Docker 环境
-
-**Docker 运行命令**
-
-```bash
-# 使用通用密码
-docker run -d --name gcli2api --network host -e PASSWORD=pwd -e PORT=7861 -v $(pwd)/data/creds:/app/creds ghcr.io/su-kaka/gcli2api:latest
-
-# 使用分离密码
-docker run -d --name gcli2api --network host -e API_PASSWORD=api_pwd -e PANEL_PASSWORD=panel_pwd -e PORT=7861 -v $(pwd)/data/creds:/app/creds ghcr.io/su-kaka/gcli2api:latest
-```
-
-**Docker Mac**
-
-```bash
-# 使用通用密码
-docker run -d \
-  --name gcli2api \
-  -p 7861:7861 \
-  -p 8080:8080 \
-  -e PASSWORD=pwd \
-  -e PORT=7861 \
-  -v "$(pwd)/data/creds":/app/creds \
-  ghcr.io/su-kaka/gcli2api:latest
-```
-
-```bash
-# 使用分离密码
-docker run -d \
---name gcli2api \
--p 7861:7861 \
--p 8080:8080 \
--e API_PASSWORD=api_pwd \
--e PANEL_PASSWORD=panel_pwd \
--e PORT=7861 \
--v $(pwd)/data/creds:/app/creds \
-ghcr.io/su-kaka/gcli2api:latest
-```
-
-**Docker Compose 运行命令**
-
-1. 将以下内容保存为 `docker-compose.yml` 文件：
-
-   ```yaml
-   version: "3.8"
-
-   services:
-     gcli2api:
-       image: ghcr.io/su-kaka/gcli2api:latest
-       container_name: gcli2api
-       restart: unless-stopped
-       network_mode: host
-       environment:
-         # 使用通用密码（推荐用于简单部署）
-         - PASSWORD=pwd
-         - PORT=7861
-         # 或使用分离密码（推荐用于生产环境）
-         # - API_PASSWORD=your_api_password
-         # - PANEL_PASSWORD=your_panel_password
-       volumes:
-         - ./data/creds:/app/creds
-       healthcheck:
-         test: ["CMD-SHELL", 'python -c "import sys, urllib.request, os; port = os.environ.get(''PORT'', ''7861''); req = urllib.request.Request(f''http://localhost:{port}/v1/models'', headers={''Authorization'': ''Bearer '' + os.environ.get(''PASSWORD'', ''pwd'')}); sys.exit(0 if urllib.request.urlopen(req, timeout=5).getcode() == 200 else 1)"']
-         interval: 30s
-         timeout: 10s
-         retries: 3
-         start_period: 40s
-   ```
-
-2. 启动服务：
-   ```bash
-   docker-compose up -d
-   ```
-
----
-
-## ⚠️ 注意事项
-
-- 当前 OAuth 验证流程**仅支持本地主机（localhost）访问**，即须通过 `http://127.0.0.1:7861/auth` 完成认证（默认端口 7861，可通过 PORT 环境变量修改）。
-- **如需在云服务器或其他远程环境部署，请先在本地运行服务并完成 OAuth 验证，获得生成的 json 凭证文件（位于 `./geminicli/creds` 目录）后，再在auth面板将该文件上传即可。**
-- **请严格遵守使用限制，仅用于个人学习和非商业用途**
-
----
-
-## 配置说明
-
-1. 访问 `http://127.0.0.1:7861/auth` （默认端口，可通过 PORT 环境变量修改）
-2. 完成 OAuth 认证流程（默认密码：`pwd`，可通过环境变量修改）
-   - **GCLI 模式**：用于获取 Google Cloud Gemini API 凭证
-   - **Antigravity 模式**：用于获取 Google Antigravity API 凭证
-3. 配置客户端：
-
-**OpenAI 兼容客户端：**
-
-- **端点地址**：`http://127.0.0.1:7861/v1`
-- **API 密钥**：`pwd`（默认值，可通过 API_PASSWORD 或 PASSWORD 环境变量修改）
-
-**Gemini 原生客户端：**
-
-- **端点地址**：`http://127.0.0.1:7861`
-- **认证方式**：
-  - `Authorization: Bearer your_api_password`
-  - `x-goog-api-key: your_api_password`
-  - URL 参数：`?key=your_api_password`
-
-### 🌟 双认证模式支持
-
-**GCLI 认证模式**
-
-- 标准的 Google Cloud Gemini API 认证
-- 支持 OAuth2.0 认证流程
-- 自动启用必需的 Google Cloud API
-
-**Antigravity 认证模式**
-
-- Google Antigravity API 专用认证
-- 独立的凭证管理系统
-- 支持批量上传和管理
-- 与 GCLI 凭证完全隔离
-
-**统一管理界面**
-
-- 在"批量上传"标签页中可一次性管理两种凭证
-- 上半部分：GCLI 凭证批量上传（蓝色主题）
-- 下半部分：Antigravity 凭证批量上传（绿色主题）
-- 各自独立的凭证管理标签页
-
-## 💾 数据存储模式
-
-### 🌟 存储后端支持
-
-gcli2api 支持两种存储后端：**本地 SQLite（默认）** 和 **MongoDB（云端分布式存储）**
-
-### 📁 本地 SQLite 存储（默认）
-
-**默认存储方式**
-
-- 无需配置，开箱即用
-- 数据存储在本地 SQLite 数据库中
-- 适合单机部署和个人使用
-- 自动创建和管理数据库文件
-
-### 🍃 MongoDB 云端存储模式
-
-**云端分布式存储方案**
-
-当需要多实例部署或云端存储时，可以启用 MongoDB 存储模式。
-
-### ⚙️ 启用 MongoDB 模式
-
-**步骤 1: 配置 MongoDB 连接**
-
-```bash
-# 本地 MongoDB
+# Local MongoDB
 export MONGODB_URI="mongodb://localhost:27017"
 
-# MongoDB Atlas 云服务
+# MongoDB Atlas
 export MONGODB_URI="mongodb+srv://username:password@cluster.mongodb.net"
 
-# 带认证的 MongoDB
+# With authentication
 export MONGODB_URI="mongodb://admin:password@localhost:27017/admin"
 
-# 可选：自定义数据库名称（默认: gcli2api）
+# Custom database name (default: gcli2api)
 export MONGODB_DATABASE="my_gcli_db"
 ```
 
-**步骤 2: 启动应用**
+#### Docker with MongoDB
 
 ```bash
-# 应用会自动检测 MongoDB 配置并使用 MongoDB 存储
-python web.py
-```
-
-**Docker 环境使用 MongoDB**
-
-```bash
-# 单机 MongoDB 部署
 docker run -d --name gcli2api \
   -e MONGODB_URI="mongodb://mongodb:27017" \
   -e API_PASSWORD=your_password \
   --network your_network \
   ghcr.io/su-kaka/gcli2api:latest
-
-# 使用 MongoDB Atlas
-docker run -d --name gcli2api \
-  -e MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/gcli2api" \
-  -e API_PASSWORD=your_password \
-  -p 7861:7861 \
-  ghcr.io/su-kaka/gcli2api:latest
 ```
 
-**Docker Compose 示例**
+#### Docker Compose with MongoDB
 
 ```yaml
 version: "3.8"
@@ -779,497 +905,173 @@ volumes:
   mongodb_data:
 ```
 
-### 🔧 高级配置
-
-**MongoDB 连接优化**
+#### Advanced MongoDB Configuration
 
 ```bash
-# 连接池和超时配置
+# Connection pool and timeout
 export MONGODB_URI="mongodb://localhost:27017?maxPoolSize=10&serverSelectionTimeoutMS=5000"
 
-# 副本集配置
+# Replica set
 export MONGODB_URI="mongodb://host1:27017,host2:27017,host3:27017/gcli2api?replicaSet=myReplicaSet"
 
-# 读写分离配置
+# Read/write separation
 export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryPreferred"
 ```
 
-## 🏗️ 技术架构
+---
 
-### 核心模块说明
+## Environment Variables
 
-**认证和凭证管理** (`src/auth.py`, `src/credential_manager.py`)
+### Basic Configuration
 
-- OAuth 2.0 认证流程管理
-- 多凭证文件状态管理和轮换
-- 自动故障检测和恢复
-- JWT 令牌生成和验证
+| Variable | Default   | Description         |
+| -------- | --------- | ------------------- |
+| `PORT`   | `7861`    | Server port         |
+| `HOST`   | `0.0.0.0` | Server bind address |
 
-**API 路由和转换** (`src/openai_router.py`, `src/gemini_router.py`, `src/openai_transfer.py`)
+### Password Configuration
 
-- OpenAI 和 Gemini 格式双向转换
-- 多模态输入处理（文本+图像）
-- 思维链内容分离和处理
-- 流式响应管理
+| Variable         | Default             | Description                               |
+| ---------------- | ------------------- | ----------------------------------------- |
+| `PASSWORD`       | `pwd`               | Universal password (overrides both below) |
+| `API_PASSWORD`   | inherits `PASSWORD` | Chat API access password                  |
+| `PANEL_PASSWORD` | inherits `PASSWORD` | Control panel access password             |
 
-**网络和代理** (`src/httpx_client.py`, `src/google_chat_api.py`)
+### Performance & Stability
 
-- 统一 HTTP 客户端管理
-- 代理配置和热更新支持
-- 超时和重试策略
-- 异步请求池管理
+| Variable                       | Default | Description                      |
+| ------------------------------ | ------- | -------------------------------- |
+| `CALLS_PER_ROTATION`           | `10`    | Calls before credential rotation |
+| `RETRY_429_ENABLED`            | `true`  | Enable 429 error auto-retry      |
+| `RETRY_429_MAX_RETRIES`        | `3`     | Max 429 retry attempts           |
+| `RETRY_429_INTERVAL`           | `1.0`   | 429 retry interval (seconds)     |
+| `ANTI_TRUNCATION_MAX_ATTEMPTS` | `3`     | Max anti-truncation retries      |
 
-**状态管理** (`src/state_manager.py`, `src/usage_stats.py`)
+### Network & Proxy
 
-- 原子化状态操作
-- 使用统计和配额管理
-- 文件锁和并发安全
-- 数据持久化（TOML 格式）
+| Variable               | Default | Description                           |
+| ---------------------- | ------- | ------------------------------------- |
+| `PROXY`                | -       | HTTP/HTTPS proxy (`http://host:port`) |
+| `OAUTH_PROXY_URL`      | -       | OAuth authentication proxy endpoint   |
+| `GOOGLEAPIS_PROXY_URL` | -       | Google APIs proxy endpoint            |
+| `METADATA_SERVICE_URL` | -       | Metadata service proxy endpoint       |
 
-**任务管理** (`src/task_manager.py`)
+### Automation
 
-- 全局异步任务生命周期管理
-- 资源清理和内存管理
-- 优雅关闭和异常处理
+| Variable              | Default | Description                          |
+| --------------------- | ------- | ------------------------------------ |
+| `AUTO_BAN`            | `true`  | Enable credential auto-ban           |
+| `AUTO_LOAD_ENV_CREDS` | `false` | Auto-load env credentials on startup |
 
-**Web 控制台** (`src/web_routes.py`)
+### Compatibility
 
-- RESTful API 端点
-- WebSocket 实时通信
-- 移动端适配检测
-- 批量操作支持
+| Variable             | Default | Description                              |
+| -------------------- | ------- | ---------------------------------------- |
+| `COMPATIBILITY_MODE` | `false` | Convert system messages to user messages |
 
-### 高级特性实现
+### Logging
 
-**流式抗截断机制** (`src/anti_truncation.py`)
+| Variable    | Default        | Description                          |
+| ----------- | -------------- | ------------------------------------ |
+| `LOG_LEVEL` | `INFO`         | Log level (DEBUG/INFO/WARNING/ERROR) |
+| `LOG_FILE`  | `gcli2api.log` | Log file path                        |
 
-- 检测响应截断模式
-- 自动重试和状态恢复
-- 上下文连接管理
+### Storage
 
-**格式检测和转换** (`src/format_detector.py`)
+| Variable           | Default    | Description                                      |
+| ------------------ | ---------- | ------------------------------------------------ |
+| `MONGODB_URI`      | -          | MongoDB connection string (enables MongoDB mode) |
+| `MONGODB_DATABASE` | `gcli2api` | MongoDB database name                            |
 
-- 自动检测请求格式（OpenAI vs Gemini）
-- 无缝格式转换
-- 参数映射和验证
+### Debug (Anthropic)
 
-**用户代理模拟** (`src/utils.py`)
-
-- GeminiCLI 格式用户代理生成
-- 平台检测和客户端元数据
-- API 兼容性保证
-
-### 环境变量配置
-
-**基础配置**
-
-- `PORT`: 服务端口（默认：7861）
-- `HOST`: 服务器监听地址（默认：0.0.0.0）
-
-**密码配置**
-
-- `API_PASSWORD`: 聊天 API 访问密码（默认：继承 PASSWORD 或 pwd）
-- `PANEL_PASSWORD`: 控制面板访问密码（默认：继承 PASSWORD 或 pwd）
-- `PASSWORD`: 通用密码，设置后覆盖上述两个（默认：pwd）
-
-**性能和稳定性配置**
-
-- `CALLS_PER_ROTATION`: 每个凭证轮换前的调用次数（默认：10）
-- `RETRY_429_ENABLED`: 启用 429 错误自动重试（默认：true）
-- `RETRY_429_MAX_RETRIES`: 429 错误最大重试次数（默认：3）
-- `RETRY_429_INTERVAL`: 429 错误重试间隔，秒（默认：1.0）
-- `ANTI_TRUNCATION_MAX_ATTEMPTS`: 抗截断最大重试次数（默认：3）
-
-**网络和代理配置**
-
-- `PROXY`: HTTP/HTTPS 代理地址（格式：`http://host:port`）
-- `OAUTH_PROXY_URL`: OAuth 认证代理端点
-- `GOOGLEAPIS_PROXY_URL`: Google APIs 代理端点
-- `METADATA_SERVICE_URL`: 元数据服务代理端点
-
-**自动化配置**
-
-- `AUTO_BAN`: 启用凭证自动封禁（默认：true）
-- `AUTO_LOAD_ENV_CREDS`: 启动时自动加载环境变量凭证（默认：false）
-
-**兼容性配置**
-
-- `COMPATIBILITY_MODE`: 启用兼容性模式，将 system 消息转为 user 消息（默认：false）
-
-**日志配置**
-
-- `LOG_LEVEL`: 日志级别（DEBUG/INFO/WARNING/ERROR，默认：INFO）
-- `LOG_FILE`: 日志文件路径（默认：gcli2api.log）
-
-**存储配置**
-
-**SQLite 配置（默认）**
-
-- 无需配置，自动使用本地 SQLite 数据库
-- 数据库文件自动创建在项目目录
-
-**MongoDB 配置（可选云端存储）**
-
-- `MONGODB_URI`: MongoDB 连接字符串（设置后启用 MongoDB 模式）
-- `MONGODB_DATABASE`: MongoDB 数据库名称（默认：gcli2api）
-
-**Docker 使用示例**
-
-```bash
-# 使用通用密码
-docker run -d --name gcli2api \
-  -e PASSWORD=mypassword \
-  -e PORT=7861 \
-  ghcr.io/su-kaka/gcli2api:latest
-
-# 使用分离密码
-docker run -d --name gcli2api \
-  -e API_PASSWORD=my_api_password \
-  -e PANEL_PASSWORD=my_panel_password \
-  -e PORT=7861 \
-  ghcr.io/su-kaka/gcli2api:latest
-```
-
-注意：当设置了凭证环境变量时，系统将优先使用环境变量中的凭证，忽略 `creds` 目录中的文件。
-
-### API 使用方式
-
-本服务支持三套完整的 API 端点：
-
-#### 1. OpenAI 兼容端点（GCLI）
-
-**端点：** `/v1/chat/completions`
-**认证：** `Authorization: Bearer your_api_password`
-
-支持两种请求格式，会自动检测并处理：
-
-**OpenAI 格式：**
-
-```json
-{
-  "model": "gemini-2.5-pro",
-  "messages": [
-    { "role": "system", "content": "You are a helpful assistant" },
-    { "role": "user", "content": "Hello" }
-  ],
-  "temperature": 0.7,
-  "stream": true
-}
-```
-
-**Gemini 原生格式：**
-
-```json
-{
-  "model": "gemini-2.5-pro",
-  "contents": [{ "role": "user", "parts": [{ "text": "Hello" }] }],
-  "systemInstruction": { "parts": [{ "text": "You are a helpful assistant" }] },
-  "generationConfig": {
-    "temperature": 0.7
-  }
-}
-```
-
-#### 2. Gemini 原生端点（GCLI）
-
-**非流式端点：** `/v1/models/{model}:generateContent`
-**流式端点：** `/v1/models/{model}:streamGenerateContent`
-**模型列表：** `/v1/models`
-
-**认证方式（任选一种）：**
-
-- `Authorization: Bearer your_api_password`
-- `x-goog-api-key: your_api_password`
-- URL 参数：`?key=your_api_password`
-
-**请求示例：**
-
-```bash
-# 使用 x-goog-api-key 头部
-curl -X POST "http://127.0.0.1:7861/v1/models/gemini-2.5-pro:generateContent" \
-  -H "x-goog-api-key: your_api_password" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "contents": [
-      {"role": "user", "parts": [{"text": "Hello"}]}
-    ]
-  }'
-
-# 使用 URL 参数
-curl -X POST "http://127.0.0.1:7861/v1/models/gemini-2.5-pro:streamGenerateContent?key=your_api_password" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "contents": [
-      {"role": "user", "parts": [{"text": "Hello"}]}
-    ]
-  }'
-```
-
-#### 3. Antigravity API 端点
-
-**支持双格式：OpenAI 和 Gemini**
-
-##### Antigravity OpenAI 格式端点
-
-**端点：** `/antigravity/v1/chat/completions`
-**认证：** `Authorization: Bearer your_api_password`
-
-**请求示例：**
-
-```bash
-curl -X POST "http://127.0.0.1:7861/antigravity/v1/chat/completions" \
-  -H "Authorization: Bearer your_api_password" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-sonnet-4-5",
-    "messages": [
-      {"role": "user", "content": "Hello"}
-    ],
-    "stream": true
-  }'
-```
-
-##### Antigravity Gemini 格式端点
-
-**非流式端点：** `/antigravity/v1/models/{model}:generateContent`
-**流式端点：** `/antigravity/v1/models/{model}:streamGenerateContent`
-
-**认证方式（任选一种）：**
-
-- `Authorization: Bearer your_api_password`
-- `x-goog-api-key: your_api_password`
-- URL 参数：`?key=your_api_password`
-
-**请求示例：**
-
-```bash
-# Gemini 格式非流式请求
-curl -X POST "http://127.0.0.1:7861/antigravity/v1/models/claude-sonnet-4-5:generateContent" \
-  -H "x-goog-api-key: your_api_password" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "contents": [
-      {"role": "user", "parts": [{"text": "Hello"}]}
-    ],
-    "generationConfig": {
-      "temperature": 0.7
-    }
-  }'
-
-# Gemini 格式流式请求
-curl -X POST "http://127.0.0.1:7861/antigravity/v1/models/gemini-2.5-flash:streamGenerateContent?key=your_api_password" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "contents": [
-      {"role": "user", "parts": [{"text": "Hello"}]}
-    ]
-  }'
-```
-
-**支持的 Antigravity 模型：**
-
-- Claude 系列：`claude-sonnet-4-5`、`claude-opus-4-5` 等
-- Gemini 系列：`gemini-2.5-flash`、`gemini-2.5-pro` 等
-- 自动支持思维模型（thinking models）
-
-**Gemini 原生banana：**
-
-```python
-from io import BytesIO
-from PIL import Image
-from google.genai import Client
-from google.genai.types import HttpOptions
-from google.genai import types
-# The client gets the API key from the environment variable `GEMINI_API_KEY`.
-
-client = Client(
-            api_key="pwd",
-            http_options=HttpOptions(base_url="http://127.0.0.1:7861"),
-        )
-
-prompt = (
-    """
-    画一只猫
-    """
-)
-
-response = client.models.generate_content(
-    model="gemini-2.5-flash-image",
-    contents=[prompt],
-    config=types.GenerateContentConfig(
-        image_config=types.ImageConfig(
-            aspect_ratio="16:9",
-        )
-    )
-)
-for part in response.candidates[0].content.parts:
-    if part.text is not None:
-        print(part.text)
-    elif part.inline_data is not None:
-        image = Image.open(BytesIO(part.inline_data.data))
-        image.save("generated_image.png")
-
-```
-
-**说明：**
-
-- OpenAI 端点返回 OpenAI 兼容格式
-- Gemini 端点返回 Gemini 原生格式
-- 两种端点使用相同的 API 密码
-
-## 📋 完整 API 参考
-
-### Web 控制台 API
-
-**认证端点**
-
-- `POST /auth/login` - 用户登录
-- `POST /auth/start` - 开始 GCLI OAuth 认证
-- `POST /auth/antigravity/start` - 开始 Antigravity OAuth 认证
-- `POST /auth/callback` - 处理 OAuth 回调
-- `GET /auth/status/{project_id}` - 检查认证状态
-- `GET /auth/antigravity/credentials` - 获取 Antigravity 凭证
-
-**GCLI 凭证管理端点**
-
-- `GET /creds/status` - 获取所有 GCLI 凭证状态
-- `POST /creds/action` - 单个 GCLI 凭证操作（启用/禁用/删除）
-- `POST /creds/batch-action` - 批量 GCLI 凭证操作
-- `POST /auth/upload` - 批量上传 GCLI 凭证文件（支持 ZIP）
-- `GET /creds/download/{filename}` - 下载 GCLI 凭证文件
-- `GET /creds/download-all` - 打包下载所有 GCLI 凭证
-- `POST /creds/fetch-email/{filename}` - 获取 GCLI 用户邮箱
-- `POST /creds/refresh-all-emails` - 批量刷新 GCLI 用户邮箱
-
-**Antigravity 凭证管理端点**
-
-- `GET /antigravity/creds/status` - 获取所有 Antigravity 凭证状态
-- `POST /antigravity/creds/action` - 单个 Antigravity 凭证操作（启用/禁用/删除）
-- `POST /antigravity/creds/batch-action` - 批量 Antigravity 凭证操作
-- `POST /antigravity/auth/upload` - 批量上传 Antigravity 凭证文件（支持 ZIP）
-- `GET /antigravity/creds/download/{filename}` - 下载 Antigravity 凭证文件
-- `GET /antigravity/creds/download-all` - 打包下载所有 Antigravity 凭证
-- `POST /antigravity/creds/fetch-email/{filename}` - 获取 Antigravity 用户邮箱
-- `POST /antigravity/creds/refresh-all-emails` - 批量刷新 Antigravity 用户邮箱
-
-**配置管理端点**
-
-- `GET /config/get` - 获取当前配置
-- `POST /config/save` - 保存配置
-
-**环境变量凭证端点**
-
-- `POST /auth/load-env-creds` - 加载环境变量凭证
-- `DELETE /auth/env-creds` - 清除环境变量凭证
-- `GET /auth/env-creds-status` - 获取环境变量凭证状态
-
-**日志管理端点**
-
-- `POST /auth/logs/clear` - 清空日志
-- `GET /auth/logs/download` - 下载日志文件
-- `WebSocket /auth/logs/stream` - 实时日志流
-
-**使用统计端点**
-
-- `GET /usage/stats` - 获取使用统计
-- `GET /usage/aggregated` - 获取聚合统计
-- `POST /usage/update-limits` - 更新使用限制
-- `POST /usage/reset` - 重置使用统计
-
-### 聊天 API 功能特性
-
-**多模态支持**
-
-```json
-{
-  "model": "gemini-2.5-pro",
-  "messages": [
-    {
-      "role": "user",
-      "content": [
-        { "type": "text", "text": "描述这张图片" },
-        {
-          "type": "image_url",
-          "image_url": {
-            "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABA..."
-          }
-        }
-      ]
-    }
-  ]
-}
-```
-
-**思维模式支持**
-
-```json
-{
-  "model": "gemini-2.5-pro-maxthinking",
-  "messages": [{ "role": "user", "content": "复杂数学问题" }]
-}
-```
-
-响应将包含分离的思维内容：
-
-```json
-{
-  "choices": [
-    {
-      "message": {
-        "role": "assistant",
-        "content": "最终答案",
-        "reasoning_content": "详细的思考过程..."
-      }
-    }
-  ]
-}
-```
-
-**流式抗截断使用**
-
-```json
-{
-  "model": "流式抗截断/gemini-2.5-pro",
-  "messages": [{ "role": "user", "content": "写一篇长文章" }],
-  "stream": true
-}
-```
-
-**兼容性模式**
-
-```bash
-# 启用兼容性模式
-export COMPATIBILITY_MODE=true
-```
-
-此模式下，所有 `system` 消息会转换为 `user` 消息，提高与某些客户端的兼容性。
+| Variable               | Default | Description                      |
+| ---------------------- | ------- | -------------------------------- |
+| `ANTHROPIC_DEBUG`      | -       | Enable verbose Anthropic logging |
+| `ANTHROPIC_DEBUG_BODY` | -       | Print request/response bodies    |
 
 ---
 
-## 💬 交流群
+## Troubleshooting
 
-欢迎加入 QQ 群交流讨论！
+### Common Issues
 
-**QQ 群号：937681997**
+| Issue                    | Cause               | Solution                                                   |
+| ------------------------ | ------------------- | ---------------------------------------------------------- |
+| OAuth fails              | Not on localhost    | Complete OAuth on localhost first, then upload credentials |
+| 429 errors               | Rate limited        | Enable `RETRY_429_ENABLED`, add more credentials           |
+| Truncated responses      | Response too long   | Use `流式抗截断/` prefix on model name                     |
+| Connection refused       | Server not running  | Start server with `python web.py`                          |
+| Invalid credentials      | Expired OAuth token | Re-authenticate or check credential status                 |
+| MongoDB connection fails | Wrong URI           | Verify `MONGODB_URI` format and connectivity               |
 
-<img src="docs/qq群.jpg" width="200" alt="QQ群二维码">
+### Debug Commands
+
+```bash
+# Check server status
+curl http://localhost:7861/v1/models -H "Authorization: Bearer pwd"
+
+# View credential status
+curl http://localhost:7861/creds/status -H "Authorization: Bearer pwd"
+
+# Enable debug logging
+export LOG_LEVEL=DEBUG
+python web.py
+```
+
+### Log Locations
+
+- **Server logs**: `gcli2api.log` (or `LOG_FILE` path)
+- **Real-time logs**: WebSocket at `/auth/logs/stream`
+- **Download logs**: GET `/auth/logs/download`
 
 ---
 
-## 支持项目
+## License
 
-如果这个项目对您有帮助，欢迎支持项目的持续发展！
+**Cooperative Non-Commercial License (CNC-1.0)**
 
-详细捐赠信息请查看：[📖 捐赠说明文档](docs/DONATE.md)
+### Allowed Uses
+
+- Personal learning, research, education
+- Non-profit organization use
+- Open source project integration (same license)
+- Academic research and publications
+
+### Prohibited Uses
+
+- Any commercial use
+- Use by companies with >$1M annual revenue
+- VC-backed or publicly traded companies
+- Paid services or products
+- Commercial competition
+
+See [LICENSE](LICENSE) for full terms.
 
 ---
 
-## 许可证与免责声明
+## Disclaimer
 
-本项目仅供学习和研究用途。使用本项目表示您同意：
+This project is for learning and research purposes only. By using this project, you agree to:
 
-- 不将本项目用于任何商业用途
-- 承担使用本项目的所有风险和责任
-- 遵守相关的服务条款和法律法规
+- Not use for any commercial purposes
+- Assume all risks and responsibilities
+- Comply with relevant terms of service and laws
 
-项目作者对因使用本项目而产生的任何直接或间接损失不承担责任。
+The project authors are not liable for any direct or indirect damages arising from use of this project.
+
+---
+
+## Community
+
+**QQ Group: 937681997**
+
+<img src="docs/qq群.jpg" width="200" alt="QQ Group QR Code">
+
+---
+
+## Support
+
+If this project helps you, consider supporting its continued development!
+
+See [Donation Guide](docs/DONATE.md) for details.

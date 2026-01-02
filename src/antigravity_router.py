@@ -13,7 +13,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from config import get_anti_truncation_max_attempts
 from log import log
-from .utils import is_anti_truncation_model, authenticate_bearer, authenticate_gemini_flexible, authenticate_sdwebui_flexible, get_base_model_from_feature_model
+from .utils import (
+    is_anti_truncation_model,
+    authenticate_bearer,
+    authenticate_gemini_flexible,
+    authenticate_sdwebui_flexible,
+    get_base_model_from_feature_model,
+)
 from .antigravity_api import (
     build_antigravity_request_body,
     send_antigravity_request_no_stream,
@@ -102,21 +108,26 @@ def extract_images_from_content(content: Any) -> Dict[str, Any]:
                     # 解析 data:image/png;base64,xxx 格式
                     if image_url.startswith("data:image/"):
                         import re
+
                         match = re.match(r"^data:image/(\w+);base64,(.+)$", image_url)
                         if match:
                             mime_type = match.group(1)
                             base64_data = match.group(2)
-                            result["images"].append({
-                                "inlineData": {
-                                    "mimeType": f"image/{mime_type}",
-                                    "data": base64_data
+                            result["images"].append(
+                                {
+                                    "inlineData": {
+                                        "mimeType": f"image/{mime_type}",
+                                        "data": base64_data,
+                                    }
                                 }
-                            })
+                            )
 
     return result
 
 
-def openai_messages_to_antigravity_contents(messages: List[Any]) -> List[Dict[str, Any]]:
+def openai_messages_to_antigravity_contents(
+    messages: List[Any],
+) -> List[Dict[str, Any]]:
     """
     将 OpenAI 消息格式转换为 Antigravity contents 格式
     """
@@ -167,7 +178,6 @@ def openai_messages_to_antigravity_contents(messages: List[Any]) -> List[Dict[st
             if tool_calls:
                 for tool_call in tool_calls:
                     tc_id = getattr(tool_call, "id", None)
-                    tc_type = getattr(tool_call, "type", "function")
                     tc_function = getattr(tool_call, "function", None)
 
                     if tc_function:
@@ -178,18 +188,24 @@ def openai_messages_to_antigravity_contents(messages: List[Any]) -> List[Dict[st
                         if isinstance(func_args, str):
                             try:
                                 args_dict = json.loads(func_args)
-                            except:
+                            except (json.JSONDecodeError, ValueError):
                                 args_dict = {"query": func_args}
                         else:
                             args_dict = func_args
 
-                        parts.append({
-                            "functionCall": {
-                                "id": tc_id,
-                                "name": func_name,
-                                "args": args_dict
+                        # For Gemini 3 models, functionCall parts require a thoughtSignature.
+                        # Use dummy signature to bypass validation when no thinking block is available.
+                        # See: https://ai.google.dev/gemini-api/docs/thought-signatures
+                        parts.append(
+                            {
+                                "functionCall": {
+                                    "id": tc_id,
+                                    "name": func_name,
+                                    "args": args_dict,
+                                },
+                                "thoughtSignature": "skip_thought_signature_validator",
                             }
-                        })
+                        )
 
             if parts:
                 contents.append({"role": "model", "parts": parts})
@@ -200,21 +216,27 @@ def openai_messages_to_antigravity_contents(messages: List[Any]) -> List[Dict[st
             func_name = getattr(msg, "name", None)
             if not func_name:
                 # 如果没有提供名称,尝试从 tool_call_id 推断或使用默认值
-                func_name = f"function_{tool_call_id}" if tool_call_id else "unknown_function"
+                func_name = (
+                    f"function_{tool_call_id}" if tool_call_id else "unknown_function"
+                )
 
-            parts = [{
-                "functionResponse": {
-                    "id": tool_call_id,
-                    "name": func_name,
-                    "response": {"output": content}
+            parts = [
+                {
+                    "functionResponse": {
+                        "id": tool_call_id,
+                        "name": func_name,
+                        "response": {"output": content},
+                    }
                 }
-            }]
+            ]
             contents.append({"role": "user", "parts": parts})
 
     return contents
 
 
-def gemini_contents_to_antigravity_contents(gemini_contents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def gemini_contents_to_antigravity_contents(
+    gemini_contents: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     """
     将 Gemini 原生 contents 格式转换为 Antigravity contents 格式
     Gemini 和 Antigravity 的 contents 格式基本一致，只需要做少量调整
@@ -225,15 +247,14 @@ def gemini_contents_to_antigravity_contents(gemini_contents: List[Dict[str, Any]
         role = content.get("role", "user")
         parts = content.get("parts", [])
 
-        contents.append({
-            "role": role,
-            "parts": parts
-        })
+        contents.append({"role": role, "parts": parts})
 
     return contents
 
 
-def convert_openai_tools_to_antigravity(tools: Optional[List[Any]]) -> Optional[List[Dict[str, Any]]]:
+def convert_openai_tools_to_antigravity(
+    tools: Optional[List[Any]],
+) -> Optional[List[Dict[str, Any]]]:
     """
     将 OpenAI 工具定义转换为 Antigravity 格式
     """
@@ -241,8 +262,15 @@ def convert_openai_tools_to_antigravity(tools: Optional[List[Any]]) -> Optional[
         return None
 
     # 需要排除的字段
-    EXCLUDED_KEYS = {'$schema', 'additionalProperties', 'minLength', 'maxLength',
-                     'minItems', 'maxItems', 'uniqueItems'}
+    EXCLUDED_KEYS = {
+        "$schema",
+        "additionalProperties",
+        "minLength",
+        "maxLength",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+    }
 
     def clean_parameters(obj):
         """递归清理参数对象"""
@@ -277,11 +305,13 @@ def convert_openai_tools_to_antigravity(tools: Optional[List[Any]]) -> Optional[
                 # 清理参数
                 cleaned_params = clean_parameters(func_params)
 
-                function_declarations.append({
-                    "name": func_name,
-                    "description": func_desc,
-                    "parameters": cleaned_params
-                })
+                function_declarations.append(
+                    {
+                        "name": func_name,
+                        "description": func_desc,
+                        "parameters": cleaned_params,
+                    }
+                )
 
     if function_declarations:
         return [{"functionDeclarations": function_declarations}]
@@ -290,9 +320,7 @@ def convert_openai_tools_to_antigravity(tools: Optional[List[Any]]) -> Optional[
 
 
 def generate_generation_config(
-    parameters: Dict[str, Any],
-    enable_thinking: bool,
-    model_name: str
+    parameters: Dict[str, Any], enable_thinking: bool, model_name: str
 ) -> Dict[str, Any]:
     """
     生成 Antigravity generationConfig，使用 GeminiGenerationConfig 模型
@@ -305,7 +333,7 @@ def generate_generation_config(
             "<|bot|>",
             "<|context_request|>",
             "<|endoftext|>",
-            "<|end_of_turn|>"
+            "<|end_of_turn|>",
         ],
         "topK": parameters.get("top_k", 50),  # 默认值 50
     }
@@ -331,7 +359,7 @@ def generate_generation_config(
     if enable_thinking:
         config_dict["thinkingConfig"] = {
             "includeThoughts": True,
-            "thinkingBudget": 1024
+            "thinkingBudget": 1024,
         }
 
         # Claude 思考模型：删除 topP 参数
@@ -343,7 +371,9 @@ def generate_generation_config(
         config = GeminiGenerationConfig(**config_dict)
         return config.model_dump(exclude_none=True)
     except Exception as e:
-        log.warning(f"[ANTIGRAVITY] Failed to validate generation config: {e}, using dict directly")
+        log.warning(
+            f"[ANTIGRAVITY] Failed to validate generation config: {e}, using dict directly"
+        )
         return config_dict
 
 
@@ -384,8 +414,8 @@ def convert_to_openai_tool_call(function_call: Dict[str, Any]) -> Dict[str, Any]
         type="function",
         function=OpenAIToolFunction(
             name=function_call.get("name", ""),
-            arguments=json.dumps(function_call.get("args", {}))
-        )
+            arguments=json.dumps(function_call.get("args", {})),
+        ),
     )
     return model_to_dict(tool_call)
 
@@ -397,7 +427,7 @@ async def convert_antigravity_stream_to_openai(
     model: str,
     request_id: str,
     credential_manager: Any,
-    credential_name: str
+    credential_name: str,
 ):
     """
     将 Antigravity 流式响应转换为 OpenAI 格式的 SSE 流
@@ -410,23 +440,22 @@ async def convert_antigravity_stream_to_openai(
         "tool_calls": [],
         "content_buffer": "",
         "thinking_buffer": "",
-        "success_recorded": False
+        "success_recorded": False,
     }
 
     created = int(time.time())
 
     try:
+
         def build_content_chunk(content: str) -> str:
             chunk = {
                 "id": request_id,
                 "object": "chat.completion.chunk",
                 "created": created,
                 "model": model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {"content": content},
-                    "finish_reason": None
-                }]
+                "choices": [
+                    {"index": 0, "delta": {"content": content}, "finish_reason": None}
+                ],
             }
             return f"data: {json.dumps(chunk)}\n\n"
 
@@ -447,17 +476,24 @@ async def convert_antigravity_stream_to_openai(
             # 记录第一次成功响应
             if not state["success_recorded"]:
                 if credential_name and credential_manager:
-                    await credential_manager.record_api_call_result(credential_name, True, is_antigravity=True)
+                    await credential_manager.record_api_call_result(
+                        credential_name, True, is_antigravity=True
+                    )
                 state["success_recorded"] = True
 
             # 解析 SSE 数据
             try:
                 data = json.loads(line[6:])  # 去掉 "data: " 前缀
-            except:
+            except (json.JSONDecodeError, ValueError):
                 continue
 
             # 提取 parts
-            parts = data.get("response", {}).get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            parts = (
+                data.get("response", {})
+                .get("candidates", [{}])[0]
+                .get("content", {})
+                .get("parts", [])
+            )
 
             for part in parts:
                 # 处理思考内容
@@ -480,7 +516,9 @@ async def convert_antigravity_stream_to_openai(
                     base64_data = inline_data.get("data", "")
 
                     # 转换为 Markdown 格式的图片
-                    image_markdown = f"\n\n![生成的图片](data:{mime_type};base64,{base64_data})\n\n"
+                    image_markdown = (
+                        f"\n\n![生成的图片](data:{mime_type};base64,{base64_data})\n\n"
+                    )
                     state["content_buffer"] += image_markdown
 
                     # 发送图片块
@@ -489,11 +527,13 @@ async def convert_antigravity_stream_to_openai(
                         "object": "chat.completion.chunk",
                         "created": created,
                         "model": model,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"content": image_markdown},
-                            "finish_reason": None
-                        }]
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": image_markdown},
+                                "finish_reason": None,
+                            }
+                        ],
                     }
                     yield f"data: {json.dumps(chunk)}\n\n"
 
@@ -514,11 +554,13 @@ async def convert_antigravity_stream_to_openai(
                         "object": "chat.completion.chunk",
                         "created": created,
                         "model": model,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"content": text},
-                            "finish_reason": None
-                        }]
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": text},
+                                "finish_reason": None,
+                            }
+                        ],
                     }
                     yield f"data: {json.dumps(chunk)}\n\n"
 
@@ -530,7 +572,9 @@ async def convert_antigravity_stream_to_openai(
                     state["tool_calls"].append(tool_call)
 
             # 检查是否结束
-            finish_reason = data.get("response", {}).get("candidates", [{}])[0].get("finishReason")
+            finish_reason = (
+                data.get("response", {}).get("candidates", [{}])[0].get("finishReason")
+            )
             if finish_reason:
                 thinking_block = flush_thinking_buffer()
                 if thinking_block:
@@ -543,11 +587,13 @@ async def convert_antigravity_stream_to_openai(
                         "object": "chat.completion.chunk",
                         "created": created,
                         "model": model,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"tool_calls": state["tool_calls"]},
-                            "finish_reason": None
-                        }]
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"tool_calls": state["tool_calls"]},
+                                "finish_reason": None,
+                            }
+                        ],
                     }
                     yield f"data: {json.dumps(chunk)}\n\n"
 
@@ -556,7 +602,7 @@ async def convert_antigravity_stream_to_openai(
                 usage = {
                     "prompt_tokens": usage_metadata.get("promptTokenCount", 0),
                     "completion_tokens": usage_metadata.get("candidatesTokenCount", 0),
-                    "total_tokens": usage_metadata.get("totalTokenCount", 0)
+                    "total_tokens": usage_metadata.get("totalTokenCount", 0),
                 }
 
                 # 确定 finish_reason
@@ -571,12 +617,10 @@ async def convert_antigravity_stream_to_openai(
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {},
-                        "finish_reason": openai_finish_reason
-                    }],
-                    "usage": usage
+                    "choices": [
+                        {"index": 0, "delta": {}, "finish_reason": openai_finish_reason}
+                    ],
+                    "usage": usage,
                 }
                 yield f"data: {json.dumps(chunk)}\n\n"
 
@@ -586,11 +630,7 @@ async def convert_antigravity_stream_to_openai(
     except Exception as e:
         log.error(f"[ANTIGRAVITY] Streaming error: {e}")
         error_response = {
-            "error": {
-                "message": str(e),
-                "type": "api_error",
-                "code": 500
-            }
+            "error": {"message": str(e), "type": "api_error", "code": 500}
         }
         yield f"data: {json.dumps(error_response)}\n\n"
     finally:
@@ -606,15 +646,18 @@ async def convert_antigravity_stream_to_openai(
 
 
 def convert_antigravity_response_to_openai(
-    response_data: Dict[str, Any],
-    model: str,
-    request_id: str
+    response_data: Dict[str, Any], model: str, request_id: str
 ) -> Dict[str, Any]:
     """
     将 Antigravity 非流式响应转换为 OpenAI 格式
     """
     # 提取 parts
-    parts = response_data.get("response", {}).get("candidates", [{}])[0].get("content", {}).get("parts", [])
+    parts = (
+        response_data.get("response", {})
+        .get("candidates", [{}])[0]
+        .get("content", {})
+        .get("parts", [])
+    )
 
     content = ""
     thinking_content = ""
@@ -649,7 +692,7 @@ def convert_antigravity_response_to_openai(
     message = OpenAIChatMessage(
         role="assistant",
         content=content,
-        tool_calls=tool_calls_list if tool_calls_list else None
+        tool_calls=tool_calls_list if tool_calls_list else None,
     )
 
     # 确定 finish_reason
@@ -657,7 +700,9 @@ def convert_antigravity_response_to_openai(
     if tool_calls_list:
         finish_reason = "tool_calls"
 
-    finish_reason_raw = response_data.get("response", {}).get("candidates", [{}])[0].get("finishReason")
+    finish_reason_raw = (
+        response_data.get("response", {}).get("candidates", [{}])[0].get("finishReason")
+    )
     if finish_reason_raw == "MAX_TOKENS":
         finish_reason = "length"
 
@@ -666,14 +711,12 @@ def convert_antigravity_response_to_openai(
     usage = {
         "prompt_tokens": usage_metadata.get("promptTokenCount", 0),
         "completion_tokens": usage_metadata.get("candidatesTokenCount", 0),
-        "total_tokens": usage_metadata.get("totalTokenCount", 0)
+        "total_tokens": usage_metadata.get("totalTokenCount", 0),
     }
 
     # 使用 OpenAIChatCompletionChoice 模型
     choice = OpenAIChatCompletionChoice(
-        index=0,
-        message=message,
-        finish_reason=finish_reason
+        index=0, message=message, finish_reason=finish_reason
     )
 
     # 使用 OpenAIChatCompletionResponse 模型
@@ -683,14 +726,14 @@ def convert_antigravity_response_to_openai(
         created=int(time.time()),
         model=model,
         choices=[choice],
-        usage=usage
+        usage=usage,
     )
 
     return model_to_dict(response)
 
 
 def convert_antigravity_response_to_gemini(
-    response_data: Dict[str, Any]
+    response_data: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     将 Antigravity 非流式响应转换为 Gemini 格式
@@ -706,7 +749,7 @@ async def convert_antigravity_stream_to_gemini(
     stream_ctx: Any,
     client: Any,
     credential_manager: Any,
-    credential_name: str
+    credential_name: str,
 ):
     """
     将 Antigravity 流式响应转换为 Gemini 格式的 SSE 流
@@ -724,13 +767,15 @@ async def convert_antigravity_stream_to_gemini(
             # 记录第一次成功响应
             if not success_recorded:
                 if credential_name and credential_manager:
-                    await credential_manager.record_api_call_result(credential_name, True, is_antigravity=True)
+                    await credential_manager.record_api_call_result(
+                        credential_name, True, is_antigravity=True
+                    )
                 success_recorded = True
 
             # 解析 SSE 数据
             try:
                 data = json.loads(line[6:])  # 去掉 "data: " 前缀
-            except:
+            except (json.JSONDecodeError, ValueError):
                 continue
 
             # Antigravity 流式响应格式: {"response": {...}}
@@ -743,11 +788,7 @@ async def convert_antigravity_stream_to_gemini(
     except Exception as e:
         log.error(f"[ANTIGRAVITY GEMINI] Streaming error: {e}")
         error_response = {
-            "error": {
-                "message": str(e),
-                "code": 500,
-                "status": "INTERNAL"
-            }
+            "error": {"message": str(e), "code": 500, "status": "INTERNAL"}
         }
         yield f"data: {json.dumps(error_response)}\n\n"
     finally:
@@ -775,7 +816,9 @@ async def list_models():
 
         if not models:
             # 如果获取失败，直接返回空列表
-            log.warning("[ANTIGRAVITY] Failed to fetch models from API, returning empty list")
+            log.warning(
+                "[ANTIGRAVITY] Failed to fetch models from API, returning empty list"
+            )
             return ModelList(data=[])
 
         # models 已经是 OpenAI 格式的字典列表，扩展为包含抗截断版本
@@ -798,10 +841,7 @@ async def list_models():
 
 
 @router.post("/antigravity/v1/chat/completions")
-async def chat_completions(
-    request: Request,
-    token: str = Depends(authenticate_bearer)
-):
+async def chat_completions(request: Request, token: str = Depends(authenticate_bearer)):
     """
     处理 OpenAI 格式的聊天完成请求，转换为 Antigravity API
     """
@@ -817,7 +857,9 @@ async def chat_completions(
         request_data = ChatCompletionRequest(**raw_data)
     except Exception as e:
         log.error(f"Request validation failed: {e}")
-        raise HTTPException(status_code=400, detail=f"Request validation error: {str(e)}")
+        raise HTTPException(
+            status_code=400, detail=f"Request validation error: {str(e)}"
+        )
 
     # 健康检查
     if (
@@ -827,12 +869,20 @@ async def chat_completions(
     ):
         return JSONResponse(
             content={
-                "choices": [{"message": {"role": "assistant", "content": "antigravity API 正常工作中"}}]
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "antigravity API 正常工作中",
+                        }
+                    }
+                ]
             }
         )
 
     # 获取凭证管理器
     from src.credential_manager import get_credential_manager
+
     cred_mgr = await get_credential_manager()
 
     # 提取参数
@@ -846,20 +896,25 @@ async def chat_completions(
     if use_anti_truncation:
         # 去掉 "流式抗截断/" 前缀
         from src.utils import get_base_model_from_feature_model
+
         model = get_base_model_from_feature_model(model)
 
     # 模型名称映射
     actual_model = model_mapping(model)
     enable_thinking = is_thinking_model(model)
 
-    log.info(f"[ANTIGRAVITY] Request: model={model} -> {actual_model}, stream={stream}, thinking={enable_thinking}, anti_truncation={use_anti_truncation}")
+    log.info(
+        f"[ANTIGRAVITY] Request: model={model} -> {actual_model}, stream={stream}, thinking={enable_thinking}, anti_truncation={use_anti_truncation}"
+    )
 
     # 转换消息格式
     try:
         contents = openai_messages_to_antigravity_contents(messages)
     except Exception as e:
         log.error(f"Failed to convert messages: {e}")
-        raise HTTPException(status_code=500, detail=f"Message conversion failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Message conversion failed: {str(e)}"
+        )
 
     # 转换工具定义
     antigravity_tools = convert_openai_tools_to_antigravity(tools)
@@ -873,7 +928,9 @@ async def chat_completions(
     # 过滤 None 值
     parameters = {k: v for k, v in parameters.items() if v is not None}
 
-    generation_config = generate_generation_config(parameters, enable_thinking, actual_model)
+    generation_config = generate_generation_config(
+        parameters, enable_thinking, actual_model
+    )
 
     # 获取凭证信息（用于 project_id 和 session_id）
     cred_result = await cred_mgr.get_valid_credential(is_antigravity=True)
@@ -912,15 +969,23 @@ async def chat_completions(
 
                 # 包装请求函数以适配抗截断处理器
                 async def antigravity_request_func(payload):
-                    resources, cred_name, cred_data = await send_antigravity_request_stream(
-                        payload, cred_mgr
-                    )
+                    (
+                        resources,
+                        cred_name,
+                        cred_data,
+                    ) = await send_antigravity_request_stream(payload, cred_mgr)
                     response, stream_ctx, client = resources
                     return StreamingResponse(
                         convert_antigravity_stream_to_openai(
-                            response, stream_ctx, client, model, request_id, cred_mgr, cred_name
+                            response,
+                            stream_ctx,
+                            client,
+                            model,
+                            request_id,
+                            cred_mgr,
+                            cred_name,
                         ),
-                        media_type="text/event-stream"
+                        media_type="text/event-stream",
                     )
 
                 return await apply_anti_truncation_to_stream(
@@ -940,24 +1005,31 @@ async def chat_completions(
                 convert_antigravity_stream_to_openai(
                     response, stream_ctx, client, model, request_id, cred_mgr, cred_name
                 ),
-                media_type="text/event-stream"
+                media_type="text/event-stream",
             )
         else:
             # 非流式请求
-            response_data, cred_name, cred_data = await send_antigravity_request_no_stream(
-                request_body, cred_mgr
-            )
+            (
+                response_data,
+                cred_name,
+                cred_data,
+            ) = await send_antigravity_request_no_stream(request_body, cred_mgr)
 
             # 转换并返回响应
-            openai_response = convert_antigravity_response_to_openai(response_data, model, request_id)
+            openai_response = convert_antigravity_response_to_openai(
+                response_data, model, request_id
+            )
             return JSONResponse(content=openai_response)
 
     except Exception as e:
         log.error(f"[ANTIGRAVITY] Request failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Antigravity API request failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Antigravity API request failed: {str(e)}"
+        )
 
 
 # ==================== Gemini 格式 API 端点 ====================
+
 
 @router.get("/antigravity/v1beta/models")
 @router.get("/antigravity/v1/models")
@@ -973,7 +1045,9 @@ async def gemini_list_models(api_key: str = Depends(authenticate_gemini_flexible
 
         if not models:
             # 如果获取失败，返回空列表
-            log.warning("[ANTIGRAVITY GEMINI] Failed to fetch models from API, returning empty list")
+            log.warning(
+                "[ANTIGRAVITY GEMINI] Failed to fetch models from API, returning empty list"
+            )
             return JSONResponse(content={"models": []})
 
         # 将 OpenAI 格式转换为 Gemini 格式，同时添加抗截断版本
@@ -982,23 +1056,33 @@ async def gemini_list_models(api_key: str = Depends(authenticate_gemini_flexible
             model_id = model.get("id", "")
 
             # 添加原始模型
-            gemini_models.append({
-                "name": f"models/{model_id}",
-                "version": "001",
-                "displayName": model_id,
-                "description": f"Antigravity API - {model_id}",
-                "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
-            })
+            gemini_models.append(
+                {
+                    "name": f"models/{model_id}",
+                    "version": "001",
+                    "displayName": model_id,
+                    "description": f"Antigravity API - {model_id}",
+                    "supportedGenerationMethods": [
+                        "generateContent",
+                        "streamGenerateContent",
+                    ],
+                }
+            )
 
             # 添加流式抗截断版本
             anti_truncation_id = f"流式抗截断/{model_id}"
-            gemini_models.append({
-                "name": f"models/{anti_truncation_id}",
-                "version": "001",
-                "displayName": anti_truncation_id,
-                "description": f"Antigravity API - {anti_truncation_id} (带流式抗截断功能)",
-                "supportedGenerationMethods": ["generateContent", "streamGenerateContent"],
-            })
+            gemini_models.append(
+                {
+                    "name": f"models/{anti_truncation_id}",
+                    "version": "001",
+                    "displayName": anti_truncation_id,
+                    "description": f"Antigravity API - {anti_truncation_id} (带流式抗截断功能)",
+                    "supportedGenerationMethods": [
+                        "generateContent",
+                        "streamGenerateContent",
+                    ],
+                }
+            )
 
         return JSONResponse(content={"models": gemini_models})
 
@@ -1039,7 +1123,10 @@ async def gemini_generate_content(
             content={
                 "candidates": [
                     {
-                        "content": {"parts": [{"text": "antigravity API 正常工作中"}], "role": "model"},
+                        "content": {
+                            "parts": [{"text": "antigravity API 正常工作中"}],
+                            "role": "model",
+                        },
                         "finishReason": "STOP",
                         "index": 0,
                     }
@@ -1049,6 +1136,7 @@ async def gemini_generate_content(
 
     # 获取凭证管理器
     from src.credential_manager import get_credential_manager
+
     cred_mgr = await get_credential_manager()
 
     # 提取模型名称（移除 "models/" 前缀）
@@ -1060,20 +1148,25 @@ async def gemini_generate_content(
     if use_anti_truncation:
         # 去掉 "流式抗截断/" 前缀
         from src.utils import get_base_model_from_feature_model
+
         model = get_base_model_from_feature_model(model)
 
     # 模型名称映射
     actual_model = model_mapping(model)
     enable_thinking = is_thinking_model(model)
 
-    log.info(f"[ANTIGRAVITY GEMINI] Request: model={model} -> {actual_model}, thinking={enable_thinking}")
+    log.info(
+        f"[ANTIGRAVITY GEMINI] Request: model={model} -> {actual_model}, thinking={enable_thinking}"
+    )
 
     # 转换 Gemini contents 为 Antigravity contents
     try:
         contents = gemini_contents_to_antigravity_contents(request_data["contents"])
     except Exception as e:
         log.error(f"Failed to convert Gemini contents: {e}")
-        raise HTTPException(status_code=500, detail=f"Message conversion failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Message conversion failed: {str(e)}"
+        )
 
     # 提取 Gemini generationConfig
     gemini_config = request_data.get("generationConfig", {})
@@ -1091,7 +1184,9 @@ async def gemini_generate_content(
     # 过滤 None 值
     parameters = {k: v for k, v in parameters.items() if v is not None}
 
-    generation_config = generate_generation_config(parameters, enable_thinking, actual_model)
+    generation_config = generate_generation_config(
+        parameters, enable_thinking, actual_model
+    )
 
     # 获取凭证信息（用于 project_id 和 session_id）
     cred_result = await cred_mgr.get_valid_credential(is_antigravity=True)
@@ -1141,7 +1236,9 @@ async def gemini_generate_content(
 
     except Exception as e:
         log.error(f"[ANTIGRAVITY GEMINI] Request failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Antigravity API request failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Antigravity API request failed: {str(e)}"
+        )
 
 
 @router.post("/antigravity/v1beta/models/{model:path}:streamGenerateContent")
@@ -1167,6 +1264,7 @@ async def gemini_stream_generate_content(
 
     # 获取凭证管理器
     from src.credential_manager import get_credential_manager
+
     cred_mgr = await get_credential_manager()
 
     # 提取模型名称（移除 "models/" 前缀）
@@ -1183,14 +1281,18 @@ async def gemini_stream_generate_content(
     actual_model = model_mapping(model)
     enable_thinking = is_thinking_model(model)
 
-    log.info(f"[ANTIGRAVITY GEMINI] Stream request: model={model} -> {actual_model}, thinking={enable_thinking}, anti_truncation={use_anti_truncation}")
+    log.info(
+        f"[ANTIGRAVITY GEMINI] Stream request: model={model} -> {actual_model}, thinking={enable_thinking}, anti_truncation={use_anti_truncation}"
+    )
 
     # 转换 Gemini contents 为 Antigravity contents
     try:
         contents = gemini_contents_to_antigravity_contents(request_data["contents"])
     except Exception as e:
         log.error(f"Failed to convert Gemini contents: {e}")
-        raise HTTPException(status_code=500, detail=f"Message conversion failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Message conversion failed: {str(e)}"
+        )
 
     # 提取 Gemini generationConfig
     gemini_config = request_data.get("generationConfig", {})
@@ -1208,7 +1310,9 @@ async def gemini_stream_generate_content(
     # 过滤 None 值
     parameters = {k: v for k, v in parameters.items() if v is not None}
 
-    generation_config = generate_generation_config(parameters, enable_thinking, actual_model)
+    generation_config = generate_generation_config(
+        parameters, enable_thinking, actual_model
+    )
 
     # 获取凭证信息（用于 project_id 和 session_id）
     cred_result = await cred_mgr.get_valid_credential(is_antigravity=True)
@@ -1259,7 +1363,7 @@ async def gemini_stream_generate_content(
                     convert_antigravity_stream_to_gemini(
                         response, stream_ctx, client, cred_mgr, cred_name
                     ),
-                    media_type="text/event-stream"
+                    media_type="text/event-stream",
                 )
 
             return await apply_anti_truncation_to_stream(
@@ -1279,15 +1383,18 @@ async def gemini_stream_generate_content(
             convert_antigravity_stream_to_gemini(
                 response, stream_ctx, client, cred_mgr, cred_name
             ),
-            media_type="text/event-stream"
+            media_type="text/event-stream",
         )
 
     except Exception as e:
         log.error(f"[ANTIGRAVITY GEMINI] Stream request failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Antigravity API request failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Antigravity API request failed: {str(e)}"
+        )
 
 
 # ==================== SD-WebUI 格式 API 端点 ====================
+
 
 @router.get("/sdapi/v1/options")
 @router.get("/antigravity/sdapi/v1/options")
@@ -1322,7 +1429,9 @@ async def sdwebui_list_models(_: str = Depends(authenticate_sdwebui_flexible)):
         models = await fetch_available_models(cred_mgr)
 
         if not models:
-            log.warning("[ANTIGRAVITY SD-WebUI] Failed to fetch models from API, returning empty list")
+            log.warning(
+                "[ANTIGRAVITY SD-WebUI] Failed to fetch models from API, returning empty list"
+            )
             return []
 
         # 过滤只包含 "image" 关键词的模型
@@ -1331,14 +1440,16 @@ async def sdwebui_list_models(_: str = Depends(authenticate_sdwebui_flexible)):
             model_id = model.get("id", "")
             if "image" in model_id.lower():
                 # SD-WebUI 格式: {"title": "model_name", "model_name": "model_name", "hash": null}
-                image_models.append({
-                    "title": model_id,
-                    "model_name": model_id,
-                    "hash": None,
-                    "sha256": None,
-                    "filename": model_id,
-                    "config": None
-                })
+                image_models.append(
+                    {
+                        "title": model_id,
+                        "model_name": model_id,
+                        "hash": None,
+                        "sha256": None,
+                        "filename": model_id,
+                        "config": None,
+                    }
+                )
 
         return image_models
 
@@ -1349,7 +1460,9 @@ async def sdwebui_list_models(_: str = Depends(authenticate_sdwebui_flexible)):
 
 @router.post("/sdapi/v1/txt2img")
 @router.post("/antigravity/sdapi/v1/txt2img")
-async def sdwebui_txt2img(request: Request, _: str = Depends(authenticate_sdwebui_flexible)):
+async def sdwebui_txt2img(
+    request: Request, _: str = Depends(authenticate_sdwebui_flexible)
+):
     """处理 SD-WebUI 格式的 txt2img 请求，转换为 Antigravity API"""
     # 获取原始请求数据
     try:
@@ -1383,7 +1496,7 @@ async def sdwebui_txt2img(request: Request, _: str = Depends(authenticate_sdwebu
             "5:4": 1.25,
             "9:16": 0.5625,
             "16:9": 1.778,
-            "21:9": 2.333
+            "21:9": 2.333,
         }
         closest = min(supported_ratios.items(), key=lambda x: abs(x[1] - ratio))
         return closest[0]
@@ -1400,11 +1513,15 @@ async def sdwebui_txt2img(request: Request, _: str = Depends(authenticate_sdwebu
         image_size = "4K"
 
     # 提取模型（如果指定）
-    model = request_data.get("override_settings", {}).get("sd_model_checkpoint", "gemini-3-pro-image")
+    model = request_data.get("override_settings", {}).get(
+        "sd_model_checkpoint", "gemini-3-pro-image"
+    )
     if not model or "image" not in model.lower():
         model = "gemini-3-pro-image"
 
-    log.info(f"[ANTIGRAVITY SD-WebUI] txt2img request: model={model}, prompt={prompt[:50]}..., aspect_ratio={aspect_ratio}, image_size={image_size}")
+    log.info(
+        f"[ANTIGRAVITY SD-WebUI] txt2img request: model={model}, prompt={prompt[:50]}..., aspect_ratio={aspect_ratio}, image_size={image_size}"
+    )
 
     cred_mgr = await get_credential_manager()
 
@@ -1413,25 +1530,21 @@ async def sdwebui_txt2img(request: Request, _: str = Depends(authenticate_sdwebu
     if negative_prompt:
         full_prompt = f"{prompt}\n\nNegative prompt: {negative_prompt}"
 
-    contents = [{
-        "role": "user",
-        "parts": [{"text": full_prompt}]
-    }]
+    contents = [{"role": "user", "parts": [{"text": full_prompt}]}]
 
     # 构建 generation_config，包含图片生成参数
     parameters = {
         "response_modalities": ["TEXT", "IMAGE"],
-        "image_config": {
-            "aspect_ratio": aspect_ratio,
-            "image_size": image_size
-        }
+        "image_config": {"aspect_ratio": aspect_ratio, "image_size": image_size},
     }
 
     # 模型名称映射
     actual_model = model_mapping(model)
     enable_thinking = is_thinking_model(model)
 
-    generation_config = generate_generation_config(parameters, enable_thinking, actual_model)
+    generation_config = generate_generation_config(
+        parameters, enable_thinking, actual_model
+    )
 
     # 获取凭证信息
     cred_result = await cred_mgr.get_valid_credential(is_antigravity=True)
@@ -1460,7 +1573,12 @@ async def sdwebui_txt2img(request: Request, _: str = Depends(authenticate_sdwebu
         )
 
         # 提取生成的图片
-        parts = response_data.get("response", {}).get("candidates", [{}])[0].get("content", {}).get("parts", [])
+        parts = (
+            response_data.get("response", {})
+            .get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [])
+        )
 
         images = []
         info_text = ""
@@ -1480,12 +1598,13 @@ async def sdwebui_txt2img(request: Request, _: str = Depends(authenticate_sdwebu
         sdwebui_response = {
             "images": images,
             "parameters": request_data,
-            "info": info_text or f"Generated by {model}"
+            "info": info_text or f"Generated by {model}",
         }
 
         return JSONResponse(content=sdwebui_response)
 
     except Exception as e:
         log.error(f"[ANTIGRAVITY SD-WebUI] txt2img request failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
-
+        raise HTTPException(
+            status_code=500, detail=f"Image generation failed: {str(e)}"
+        )
