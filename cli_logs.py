@@ -9,15 +9,26 @@ Usage:
     python cli_logs.py --since 5m            # Show logs from last 5 minutes
     python cli_logs.py --component ANTHROPIC # Filter by component
     python cli_logs.py --follow              # Stream new logs (like tail -f)
+    python cli_logs.py --live                # Alias for --follow
 """
 
 import argparse
 import os
 import re
+import signal
 import sys
 import time
 from datetime import datetime, timedelta
 from typing import Optional, List, Generator
+
+# Global flag for graceful shutdown
+_shutdown_requested = False
+
+
+def _signal_handler(signum, frame):
+    """Handle interrupt signals gracefully"""
+    global _shutdown_requested
+    _shutdown_requested = True
 
 
 def parse_log_line(line: str) -> Optional[dict]:
@@ -95,7 +106,9 @@ def tail_log_file(log_path: str, n: int) -> List[str]:
 
 
 def follow_log_file(log_path: str) -> Generator[str, None, None]:
-    """Follow log file like tail -f"""
+    """Follow log file like tail -f (exit with Ctrl+C)"""
+    global _shutdown_requested
+
     if not os.path.exists(log_path):
         print(f"Log file not found: {log_path}", file=sys.stderr)
         return
@@ -103,11 +116,12 @@ def follow_log_file(log_path: str) -> Generator[str, None, None]:
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         # Go to end of file
         f.seek(0, 2)
-        while True:
+        while not _shutdown_requested:
             line = f.readline()
             if line:
                 yield line
             else:
+                # Short sleep to avoid busy waiting, but check shutdown flag frequently
                 time.sleep(0.1)
 
 
@@ -128,9 +142,7 @@ def filter_logs(
             continue
 
         # Filter by request ID
-        if req_id and (
-            not parsed["req_id"] or req_id.lower() not in parsed["req_id"].lower()
-        ):
+        if req_id and (not parsed["req_id"] or req_id.lower() not in parsed["req_id"].lower()):
             continue
 
         # Filter by level
@@ -150,10 +162,7 @@ def filter_logs(
             continue
 
         # Filter by component
-        if component and (
-            not parsed["component"]
-            or component.upper() not in parsed["component"].upper()
-        ):
+        if component and (not parsed["component"] or component.upper() not in parsed["component"].upper()):
             continue
 
         yield parsed
@@ -188,27 +197,22 @@ Examples:
     python cli_logs.py --tail 100 --level error
     python cli_logs.py --since 30m --component ANTHROPIC
     python cli_logs.py --follow
+    python cli_logs.py --live                  # Same as --follow
+    python cli_logs.py --live --level error    # Live view filtered by level
         """,
     )
     parser.add_argument("--reqid", "-r", help="Filter by request ID (partial match)")
-    parser.add_argument(
-        "--tail", "-n", type=int, default=50, help="Show last N entries (default: 50)"
-    )
+    parser.add_argument("--tail", "-n", type=int, default=50, help="Show last N entries (default: 50)")
     parser.add_argument(
         "--level",
         "-l",
         choices=["debug", "info", "warning", "error", "critical"],
         help="Show logs at or above this level",
     )
-    parser.add_argument(
-        "--since", "-s", help="Show logs since time (e.g., 5m, 1h, 30s)"
-    )
-    parser.add_argument(
-        "--component", "-c", help="Filter by component (e.g., ANTHROPIC, STREAMING)"
-    )
-    parser.add_argument(
-        "--follow", "-f", action="store_true", help="Follow log file (like tail -f)"
-    )
+    parser.add_argument("--since", "-s", help="Show logs since time (e.g., 5m, 1h, 30s)")
+    parser.add_argument("--component", "-c", help="Filter by component (e.g., ANTHROPIC, STREAMING)")
+    parser.add_argument("--follow", "-f", action="store_true", help="Follow log file (like tail -f)")
+    parser.add_argument("--live", action="store_true", help="Live log streaming (alias for --follow)")
     parser.add_argument("--json", "-j", action="store_true", help="Output as JSON")
     parser.add_argument(
         "--log-file",
@@ -217,6 +221,14 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    # --live is an alias for --follow
+    if args.live:
+        args.follow = True
+
+    # Set up signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
 
     # Determine log file path
     log_file = args.log_file or os.getenv("LOG_FILE", "log.txt")
@@ -239,9 +251,7 @@ Examples:
             lines = follow_log_file(log_file)
         else:
             # Tail mode
-            lines = (
-                line for line in tail_log_file(log_file, args.tail * 10)
-            )  # Read extra for filtering
+            lines = (line for line in tail_log_file(log_file, args.tail * 10))  # Read extra for filtering
 
         filtered = filter_logs(
             lines,
