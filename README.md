@@ -237,6 +237,7 @@ flowchart LR
 | `gemini-2.5-flash-lite`     | Lightweight flash                             |
 | `gemini-2.5-flash-image`    | Image generation                              |
 | `gemini-2.5-pro`            | Pro model                                     |
+| `gemini-3-flash`            | Gemini 3 Flash (fast preview)                 |
 | `gemini-3-pro-low`          | Gemini 3 Pro (low tier)                       |
 | `gemini-3-pro-high`         | Gemini 3 Pro (high tier)                      |
 | `gemini-3-pro-image`        | Image generation (supports -4k, -2k suffixes) |
