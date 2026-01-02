@@ -23,6 +23,7 @@
 - [Storage Backends](#storage-backends)
 - [Environment Variables](#environment-variables)
 - [Troubleshooting](#troubleshooting)
+- [Changelog](#changelog)
 - [License](#license)
 
 ---
@@ -211,50 +212,161 @@ flowchart LR
 
 #### GeminiCLI Models
 
-| Model                        | Context Window | Features                |
-| ---------------------------- | -------------- | ----------------------- |
-| `gemini-2.5-pro`             | 1M tokens      | Base model              |
-| `gemini-3-pro-preview`       | 1M tokens      | Preview model           |
-| `gemini-2.5-pro-maxthinking` | 1M tokens      | Maximum thinking budget |
-| `gemini-2.5-pro-nothinking`  | 1M tokens      | No thinking mode        |
-| `gemini-2.5-pro-search`      | 1M tokens      | Search-enhanced         |
+| Model                        | Context Window | Features                                  |
+| ---------------------------- | -------------- | ----------------------------------------- |
+| `gemini-2.5-pro`             | 1M tokens      | Base model                                |
+| `gemini-2.5-flash`           | 1M tokens      | Fast model                                |
+| `gemini-3-pro-preview`       | 1M tokens      | Preview model (requires thoughtSignature) |
+| `gemini-3-flash-preview`     | 1M tokens      | Fast preview model                        |
+| `gemini-2.5-pro-maxthinking` | 1M tokens      | Maximum thinking budget (32768 tokens)    |
+| `gemini-2.5-pro-nothinking`  | 1M tokens      | Minimal thinking mode (128 tokens)        |
+| `gemini-2.5-pro-search`      | 1M tokens      | Search grounding enabled                  |
+
+#### Antigravity Gemini Models
+
+| Model                       | Features                                      |
+| --------------------------- | --------------------------------------------- |
+| `gemini-2.5-flash`          | Fast model                                    |
+| `gemini-2.5-flash-thinking` | Flash with thinking                           |
+| `gemini-2.5-flash-lite`     | Lightweight flash                             |
+| `gemini-2.5-flash-image`    | Image generation                              |
+| `gemini-2.5-pro`            | Pro model                                     |
+| `gemini-3-pro-low`          | Gemini 3 Pro (low tier)                       |
+| `gemini-3-pro-high`         | Gemini 3 Pro (high tier)                      |
+| `gemini-3-pro-image`        | Image generation (supports -4k, -2k suffixes) |
 
 #### Antigravity Claude Models
 
-| Model ID                   | Alias             | Extended Thinking |
-| -------------------------- | ----------------- | ----------------- |
-| `claude-sonnet-4-20250514` | `claude-sonnet-4` | No                |
-| `claude-opus-4-20250514`   | `claude-opus-4`   | No                |
-| `claude-opus-4-5-20250514` | `claude-opus-4-5` | Yes               |
+| Model ID                     | Maps To                    | Extended Thinking | Notes                     |
+| ---------------------------- | -------------------------- | ----------------- | ------------------------- |
+| `claude-sonnet-4-5`          | `claude-sonnet-4-5`        | No                | Default model             |
+| `claude-sonnet-4-5-thinking` | `claude-sonnet-4-5`        | Yes               | Explicit thinking mode    |
+| `claude-opus-4-5`            | `claude-opus-4-5-thinking` | Yes               | Auto-enables thinking     |
+| `claude-opus-4-5-thinking`   | `claude-opus-4-5-thinking` | Yes               | Explicit thinking mode    |
+| `claude-opus-4`              | `gemini-3-pro-high`        | No                | Maps to Gemini 3 Pro High |
+| `claude-haiku-4-5`           | `gemini-2.5-flash`         | No                | Maps to Gemini 2.5 Flash  |
+| `gpt-oss-120b-medium`        | `gpt-oss-120b-medium`      | No                | Open source 120B model    |
+
+> **Note**: Model IDs with date suffixes (e.g., `claude-opus-4-5-20251101`) are automatically normalized to their base form. See `src/anthropic_converter.py:81-83` for the regex pattern.
 
 ### Special Model Variants
 
-| Suffix/Prefix | Example                     | Description               |
-| ------------- | --------------------------- | ------------------------- |
-| `-假流式`     | `gemini-2.5-pro-假流式`     | Fake streaming mode       |
-| `流式抗截断/` | `流式抗截断/gemini-2.5-pro` | Anti-truncation streaming |
+#### Model Prefixes (Streaming Modes)
+
+| Prefix                                 | Example                     | Description                                                               |
+| -------------------------------------- | --------------------------- | ------------------------------------------------------------------------- |
+| `假流式/` (Fake Streaming)             | `假流式/gemini-2.5-pro`     | Buffers response, then streams. Useful for clients with streaming issues. |
+| `流式抗截断/` (Anti-Truncation Stream) | `流式抗截断/gemini-2.5-pro` | Auto-retries on truncated responses. See `src/anti_truncation.py`.        |
+
+#### Model Suffixes (Thinking Modes)
+
+| Suffix         | Example                      | Description                                                                       |
+| -------------- | ---------------------------- | --------------------------------------------------------------------------------- |
+| `-maxthinking` | `gemini-2.5-pro-maxthinking` | Maximum thinking budget: 32768 (pro) / 24576 (flash). See `src/utils.py:113-117`. |
+| `-nothinking`  | `gemini-2.5-pro-nothinking`  | Minimal thinking: 128 tokens. See `src/utils.py:111-112`.                         |
+| `-search`      | `gemini-2.5-pro-search`      | Enables search grounding. See `src/utils.py:94-96`.                               |
+
+#### Image Generation Suffixes (Antigravity Only)
+
+| Suffix  | Example                   | Description                   |
+| ------- | ------------------------- | ----------------------------- |
+| `-4k`   | `gemini-3-pro-image-4k`   | 4K resolution output          |
+| `-2k`   | `gemini-3-pro-image-2k`   | 2K resolution output          |
+| `-16x9` | `gemini-3-pro-image-16x9` | 16:9 aspect ratio (landscape) |
+| `-9x16` | `gemini-3-pro-image-9x16` | 9:16 aspect ratio (portrait)  |
+| `-21x9` | `gemini-3-pro-image-21x9` | 21:9 aspect ratio (ultrawide) |
+| `-4x3`  | `gemini-3-pro-image-4x3`  | 4:3 aspect ratio              |
+| `-3x4`  | `gemini-3-pro-image-3x4`  | 3:4 aspect ratio              |
+
+> **Combining Suffixes**: Suffixes can be combined: `gemini-3-pro-image-4k-16x9` for 4K landscape output. See `src/antigravity_router.py:380-404`.
 
 ### Core Module Reference
 
-| Module                  | File                              | Description                                  |
-| ----------------------- | --------------------------------- | -------------------------------------------- |
-| **OpenAI Router**       | `openai_router.py`                | `/v1/chat/completions` endpoint handling     |
-| **Gemini Router**       | `gemini_router.py`                | Gemini native endpoint handling              |
-| **Antigravity Router**  | `antigravity_router.py`           | Antigravity OpenAI/Gemini endpoints          |
-| **Anthropic Router**    | `antigravity_anthropic_router.py` | `/v1/messages` Claude Code endpoint          |
-| **Format Detector**     | `format_detector.py`              | Auto-detect OpenAI vs Gemini format          |
-| **OpenAI Transfer**     | `openai_transfer.py`              | OpenAI <-> Gemini format conversion          |
-| **Anthropic Converter** | `anthropic_converter.py`          | Anthropic <-> Gemini format conversion       |
-| **Anthropic Streaming** | `anthropic_streaming.py`          | Gemini SSE -> Anthropic SSE conversion       |
-| **Anthropic Helpers**   | `anthropic_helpers.py`            | `remove_nulls_for_tool_input()`, debug utils |
-| **Credential Manager**  | `credential_manager.py`           | OAuth rotation, health monitoring            |
-| **State Manager**       | `state_manager.py`                | Atomic state operations, TOML persistence    |
-| **Task Manager**        | `task_manager.py`                 | Async task lifecycle management              |
-| **Token Estimator**     | `token_estimator.py`              | Input token estimation                       |
-| **Anti-Truncation**     | `anti_truncation.py`              | Response truncation detection and retry      |
-| **Storage Adapter**     | `storage_adapter.py`              | SQLite/MongoDB abstraction layer             |
-| **Web Routes**          | `web_routes.py`                   | REST API and WebSocket endpoints             |
-| **Auth**                | `auth.py`                         | OAuth 2.0 flows, JWT management              |
+| Module                  | File                              | Lines | Description                                  |
+| ----------------------- | --------------------------------- | ----- | -------------------------------------------- |
+| **OpenAI Router**       | `openai_router.py`                | 17K   | `/v1/chat/completions` endpoint handling     |
+| **Gemini Router**       | `gemini_router.py`                | 21K   | Gemini native endpoint handling              |
+| **Antigravity Router**  | `antigravity_router.py`           | 56K   | Antigravity OpenAI/Gemini endpoints          |
+| **Anthropic Router**    | `antigravity_anthropic_router.py` | 23K   | `/v1/messages` Claude Code endpoint          |
+| **Format Detector**     | `format_detector.py`              | 6K    | Auto-detect OpenAI vs Gemini format          |
+| **OpenAI Transfer**     | `openai_transfer.py`              | 32K   | OpenAI <-> Gemini format conversion          |
+| **Anthropic Converter** | `anthropic_converter.py`          | 26K   | Anthropic <-> Gemini format conversion       |
+| **Anthropic Streaming** | `anthropic_streaming.py`          | 22K   | Gemini SSE -> Anthropic SSE conversion       |
+| **Anthropic Helpers**   | `anthropic_helpers.py`            | 2K    | `remove_nulls_for_tool_input()`, debug utils |
+| **Credential Manager**  | `credential_manager.py`           | 23K   | OAuth rotation, health monitoring            |
+| **State Manager**       | `state_manager.py`                | 5K    | Atomic state operations, TOML persistence    |
+| **Task Manager**        | `task_manager.py`                 | 5K    | Async task lifecycle management              |
+| **Token Estimator**     | `token_estimator.py`              | 1K    | Input token estimation                       |
+| **Anti-Truncation**     | `anti_truncation.py`              | 27K   | Response truncation detection and retry      |
+| **Storage Adapter**     | `storage_adapter.py`              | 11K   | SQLite/MongoDB abstraction layer             |
+| **Web Routes**          | `web_routes.py`                   | 74K   | REST API and WebSocket endpoints             |
+| **Auth**                | `auth.py`                         | 51K   | OAuth 2.0 flows, JWT management              |
+
+### Technical Deep Dive
+
+#### Model Mapping Flow
+
+```mermaid
+flowchart TD
+    subgraph Input["Client Request"]
+        CM["claude-opus-4-5-20251101"]
+    end
+
+    subgraph Normalize["Normalization (anthropic_converter.py:81-83)"]
+        RE["Regex: ^(claude-(?:opus|sonnet|haiku)-4-5)-\\d{8}$"]
+        BASE["claude-opus-4-5"]
+    end
+
+    subgraph Map["Model Mapping (anthropic_converter.py:86-120)"]
+        LOOKUP["Lookup in model_mapping dict"]
+        RESULT["claude-opus-4-5-thinking"]
+    end
+
+    CM --> RE --> BASE --> LOOKUP --> RESULT
+```
+
+#### Thinking Budget Configuration
+
+| Model Type | Suffix         | Budget (tokens) | Code Reference                  |
+| ---------- | -------------- | --------------- | ------------------------------- |
+| Pro        | `-maxthinking` | 32768           | `src/utils.py:117`              |
+| Flash      | `-maxthinking` | 24576           | `src/utils.py:116`              |
+| Any        | `-nothinking`  | 128             | `src/utils.py:112`              |
+| Default    | (none)         | 1024            | `src/anthropic_converter.py:12` |
+
+#### Credential Rotation Strategy
+
+```mermaid
+flowchart LR
+    subgraph Pool["Credential Pool"]
+        C1["Cred 1 (active)"]
+        C2["Cred 2 (standby)"]
+        C3["Cred 3 (standby)"]
+    end
+
+    subgraph Rotation["Rotation Triggers"]
+        T1["CALLS_PER_ROTATION reached"]
+        T2["429 Rate Limit"]
+        T3["OAuth Token Expired"]
+    end
+
+    subgraph Action["Actions"]
+        A1["Rotate to next credential"]
+        A2["Refresh OAuth token"]
+        A3["Mark credential as banned"]
+    end
+
+    T1 --> A1
+    T2 --> A1
+    T3 --> A2
+    A1 --> C2
+```
+
+| Variable                | Default | Description                                     |
+| ----------------------- | ------- | ----------------------------------------------- |
+| `CALLS_PER_ROTATION`    | 10      | API calls before rotating to next credential    |
+| `RETRY_429_MAX_RETRIES` | 3       | Max retries on rate limit before marking banned |
+| `AUTO_BAN`              | true    | Auto-ban credentials on persistent 403/429      |
 
 ---
 
@@ -696,7 +808,7 @@ gcli2api fully supports Claude's Extended Thinking feature:
 
 ```json
 {
-  "model": "claude-opus-4-5-20250514",
+  "model": "claude-opus-4-5",
   "max_tokens": 16000,
   "thinking": {
     "type": "enabled",
@@ -750,9 +862,44 @@ data: {"type":"message_stop"}
 
 ### Tool Use Support
 
+#### Gemini 3 thoughtSignature Requirement
+
+Gemini 3 models require a `thoughtSignature` on all `functionCall` parts. gcli2api handles this automatically:
+
+```mermaid
+flowchart LR
+    subgraph Input["Anthropic Request"]
+        TH[thinking block with signature]
+        TU[tool_use block]
+    end
+
+    subgraph Convert["anthropic_converter.py"]
+        Extract["Extract signature from thinking"]
+        Attach["Attach to functionCall"]
+    end
+
+    subgraph Output["Gemini Request"]
+        FC["functionCall + thoughtSignature"]
+    end
+
+    TH --> Extract
+    TU --> Attach
+    Extract --> Attach --> FC
+```
+
+| Scenario                         | Behavior                                                |
+| -------------------------------- | ------------------------------------------------------- |
+| Thinking block precedes tool_use | Signature from thinking block attached to functionCall  |
+| No thinking block                | Dummy signature `skip_thought_signature_validator` used |
+| Multiple tool_use in one message | All get the same signature from the last thinking block |
+
+> **Code Reference**: See `src/anthropic_converter.py:399-408` for the implementation.
+
+#### Tool Use Request Example
+
 ```json
 {
-  "model": "claude-sonnet-4-20250514",
+  "model": "claude-sonnet-4-5",
   "max_tokens": 1024,
   "tools": [
     {
@@ -785,7 +932,7 @@ curl -X POST http://localhost:7861/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: pwd" \
   -d '{
-    "model": "claude-sonnet-4-20250514",
+    "model": "claude-sonnet-4-5",
     "max_tokens": 100,
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
@@ -795,7 +942,7 @@ curl -X POST http://localhost:7861/v1/messages/count_tokens \
   -H "Content-Type: application/json" \
   -H "x-api-key: pwd" \
   -d '{
-    "model": "claude-sonnet-4-20250514",
+    "model": "claude-sonnet-4-5",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -822,11 +969,15 @@ make test-thinking
 make test-cov
 ```
 
-| Module                            | Test File                    | Coverage |
-| --------------------------------- | ---------------------------- | -------- |
-| `anthropic_streaming.py`          | `test_streaming_thinking.py` | 86%      |
-| `antigravity_anthropic_router.py` | `test_router_helpers.py`     | 80%+     |
-| `anthropic_converter.py`          | `test_thinking_handling.py`  | 80%+     |
+| Module                            | Test File                         | Coverage | Lines |
+| --------------------------------- | --------------------------------- | -------- | ----- |
+| `anthropic_streaming.py`          | `test_streaming_thinking.py`      | 86%      | 1118  |
+| `antigravity_anthropic_router.py` | `test_router_helpers.py`          | 80%+     | 844   |
+| `anthropic_converter.py`          | `test_anthropic_converter.py`     | 80%+     | 800+  |
+| `anthropic_converter.py`          | `test_thinking_handling.py`       | 80%+     | 360   |
+| `anthropic_converter.py`          | `test_function_call_signature.py` | 100%     | 100+  |
+
+**Test Suite Summary**: 10 test files, 5623+ lines of test code, 236+ test cases.
 
 ---
 
@@ -1024,6 +1175,43 @@ python web.py
 - **Server logs**: `gcli2api.log` (or `LOG_FILE` path)
 - **Real-time logs**: WebSocket at `/auth/logs/stream`
 - **Download logs**: GET `/auth/logs/download`
+
+---
+
+## Changelog
+
+### 2026-01-02
+
+- **fix**: Add `thoughtSignature` to ALL `functionCall` parts for Gemini 3 compatibility (`src/anthropic_converter.py:399-408`)
+- **chore**: Add remaining changes and comprehensive tests
+
+### 2025-12-31
+
+- **feat**: Add native Anthropic Messages API with extended thinking support
+  - Native `/v1/messages` endpoint with full Anthropic Messages API compatibility
+  - Extended thinking handling (thinking blocks, signatures, budget control)
+  - Thinking-to-text conversion for clients without thinking support
+  - Tool use handling with null value sanitization
+- **refactor**: Extract shared helpers to `src/anthropic_helpers.py`
+  - `remove_nulls_for_tool_input()` - sanitize tool input
+  - `anthropic_debug_enabled()` - debug mode check
+- **fix**: Pydantic v2 deprecation (`class Config` -> `model_config = ConfigDict()`)
+- **feat**: Add CLI log viewer utility (`cli_logs.py`)
+- **test**: Add comprehensive test suite (236+ tests, 86% coverage on streaming)
+
+### 2025-12-30
+
+- **feat**: Add image generation 2K/4K resolution and aspect ratio suffixes
+  - Resolution suffixes: `-4k`, `-2k`
+  - Aspect ratio suffixes: `-16x9`, `-9x16`, `-21x9`, `-4x3`, `-3x4`
+  - See `src/antigravity_router.py:380-404`
+
+### Earlier
+
+- **feat**: MongoDB storage backend support
+- **feat**: Credential rotation and health monitoring
+- **feat**: Anti-truncation streaming mode
+- **feat**: Fake streaming mode for compatibility
 
 ---
 
