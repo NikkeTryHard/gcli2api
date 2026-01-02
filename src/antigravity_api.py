@@ -298,8 +298,11 @@ async def send_antigravity_request_stream(
                 raise stream_error
 
         except Exception as e:
+            # Use type(e).__name__ to ensure we always have meaningful error info
+            # (httpx timeout exceptions have empty str representation)
+            error_msg = str(e) or type(e).__name__
             log.error(
-                f"[ANTIGRAVITY] Request failed with credential {current_file}: {e}"
+                f"[ANTIGRAVITY] Request failed with credential {current_file}: {type(e).__name__}: {error_msg}"
             )
             if attempt < max_retries:
                 await asyncio.sleep(retry_interval)
@@ -451,8 +454,11 @@ async def send_antigravity_request_no_stream(
                 )
 
         except Exception as e:
+            # Use type(e).__name__ to ensure we always have meaningful error info
+            # (httpx timeout exceptions have empty str representation)
+            error_msg = str(e) or type(e).__name__
             log.error(
-                f"[ANTIGRAVITY] Request failed with credential {current_file}: {e}"
+                f"[ANTIGRAVITY] Request failed with credential {current_file}: {type(e).__name__}: {error_msg}"
             )
             if attempt < max_retries:
                 await asyncio.sleep(retry_interval)

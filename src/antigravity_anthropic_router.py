@@ -569,7 +569,10 @@ async def anthropic_messages(
             request_body, cred_mgr
         )
     except Exception as e:
-        log.error(f"[ANTHROPIC] 下游非流式请求失败: {e}", req_id=message_id)
+        # Use type(e).__name__ to ensure we always have meaningful error info
+        # (httpx timeout exceptions have empty str representation)
+        error_msg = str(e) or type(e).__name__
+        log.error(f"[ANTHROPIC] 下游非流式请求失败: {type(e).__name__}: {error_msg}", req_id=message_id)
         return _anthropic_error(
             status_code=500, message="下游请求失败", error_type="api_error"
         )
